@@ -8,6 +8,7 @@
     "cron": "Cron",
     "bridge": "Puente",
     "skills": "Habilidades",
+    "audit": "Auditoría",
     "system": "Sistema"
   },
   "dashboard": {
@@ -83,6 +84,16 @@
     "bridgeConnecting": "conectando...",
     "bridgeDisconnected": "desconectado",
     "bridgeNotAvailable": "Bridge no disponible. Habilite [bridge] en config.toml para chatear desde la web."
+  },
+  "audit": {
+    "title": "Auditoría",
+    "search": "Buscar",
+    "project": "Proyecto",
+    "platform": "Plataforma",
+    "type": "Tipo de evento",
+    "detail": "Detalle del evento",
+    "empty": "No hay eventos de auditoría",
+    "total": "Total {{total}} eventos"
   },
   "providers": {
     "title": "Proveedores",

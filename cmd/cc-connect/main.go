@@ -191,6 +191,11 @@ func main() {
 
 	config.ConfigPath = configPath
 	slog.Info("config loaded", "path", configPath)
+	auditor, err := core.NewFileAuditor(cfg.DataDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error initializing audit store: %v\n", err)
+		os.Exit(1)
+	}
 
 	if len(cfg.Projects) == 0 {
 		fmt.Fprintf(os.Stderr, "Error: no projects configured in %s\n", configPath)
@@ -274,6 +279,7 @@ func main() {
 		}
 
 		engine := core.NewEngine(proj.Name, agent, platforms, sessionFile, lang)
+		engine.SetAuditor(auditor)
 		showCtx := true
 		if proj.ShowContextIndicator != nil {
 			showCtx = *proj.ShowContextIndicator
@@ -872,6 +878,7 @@ func main() {
 			port = 9820
 		}
 		mgmtSrv = core.NewManagementServer(port, cfg.Management.Token, cfg.Management.CORSOrigins)
+		mgmtSrv.SetAuditor(auditor)
 		for i, e := range engines {
 			mgmtSrv.RegisterEngine(cfg.Projects[i].Name, e)
 		}

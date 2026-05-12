@@ -8,6 +8,7 @@
     "cron": "Cron",
     "bridge": "Bridge",
     "skills": "Skills",
+    "audit": "Audit",
     "system": "System"
   },
   "dashboard": {
@@ -83,6 +84,16 @@
     "bridgeConnecting": "connecting...",
     "bridgeDisconnected": "disconnected",
     "bridgeNotAvailable": "Bridge not available. Enable [bridge] in config.toml to chat from web."
+  },
+  "audit": {
+    "title": "Audit",
+    "search": "Search",
+    "project": "Project",
+    "platform": "Platform",
+    "type": "Event type",
+    "detail": "Event detail",
+    "empty": "No audit events",
+    "total": "Total {{total}} events"
   },
   "providers": {
     "title": "Providers",

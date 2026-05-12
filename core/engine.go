@@ -225,6 +225,7 @@ type Engine struct {
 	dirHistory        *DirHistory
 	baseWorkDir       string
 	projectState      *ProjectStateStore
+	auditor           Auditor
 
 	// Auto-compress settings
 	autoCompressEnabled   bool
@@ -427,6 +428,7 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 		eventIdleTimeout:      defaultEventIdleTimeout,
 		maxQueuedMessages:     defaultMaxQueuedMessages,
 		showContextIndicator:  true,
+		auditor:               noopAuditor{},
 	}
 
 	if ag != nil {
@@ -441,6 +443,99 @@ func NewEngine(name string, ag Agent, platforms []Platform, sessionStorePath str
 	}
 
 	return e
+}
+
+func (e *Engine) SetAuditor(a Auditor) {
+	if a == nil {
+		e.auditor = noopAuditor{}
+		return
+	}
+	e.auditor = a
+}
+
+func (e *Engine) auditMessage(msg *Message, eventType, role, content string, metadata map[string]any) {
+	if e.auditor == nil || msg == nil {
+		return
+	}
+	sessionID := ""
+	agentSessionID := ""
+	if e.sessions != nil {
+		s := e.sessions.GetOrCreateActive(msg.SessionKey)
+		if s != nil {
+			sessionID = s.ID
+			agentSessionID = s.GetAgentSessionID()
+		}
+	}
+	chatID := ""
+	if parts := splitSessionKey(msg.SessionKey); len(parts) >= 2 {
+		chatID = parts[1]
+	}
+	prepared, sha, truncated := PrepareAuditContent(content, 8192)
+	_ = e.auditor.Record(AuditEvent{
+		Timestamp:      time.Now(),
+		Project:        e.name,
+		EventType:      eventType,
+		SessionKey:     msg.SessionKey,
+		SessionID:      sessionID,
+		AgentSessionID: agentSessionID,
+		Platform:       msg.Platform,
+		UserID:         msg.UserID,
+		UserName:       msg.UserName,
+		ChatID:         chatID,
+		ChatName:       msg.ChatName,
+		Role:           role,
+		Content:        prepared,
+		ContentSHA256:  sha,
+		Truncated:      truncated,
+		Metadata:       metadata,
+	})
+}
+
+func (e *Engine) auditEvent(msg *Message, eventType string, attrs AuditEvent) {
+	if e.auditor == nil {
+		return
+	}
+	ev := attrs
+	ev.Timestamp = time.Now()
+	ev.Project = e.name
+	ev.EventType = eventType
+	if msg != nil {
+		if ev.SessionKey == "" {
+			ev.SessionKey = msg.SessionKey
+		}
+		if ev.Platform == "" {
+			ev.Platform = msg.Platform
+		}
+		if ev.UserID == "" {
+			ev.UserID = msg.UserID
+		}
+		if ev.UserName == "" {
+			ev.UserName = msg.UserName
+		}
+		if ev.ChatName == "" {
+			ev.ChatName = msg.ChatName
+		}
+		if ev.ChatID == "" {
+			if parts := splitSessionKey(msg.SessionKey); len(parts) >= 2 {
+				ev.ChatID = parts[1]
+			}
+		}
+	}
+	if ev.SessionKey != "" && e.sessions != nil {
+		s := e.sessions.GetOrCreateActive(ev.SessionKey)
+		if s != nil {
+			if ev.SessionID == "" {
+				ev.SessionID = s.ID
+			}
+			if ev.AgentSessionID == "" {
+				ev.AgentSessionID = s.GetAgentSessionID()
+			}
+		}
+	}
+	if ev.Content != "" {
+		ev.Content, ev.ContentSHA256, ev.Truncated = PrepareAuditContent(ev.Content, 8192)
+	}
+	_ = e.auditor.Record(ev)
 }
 
 // DefaultWorkspaceIdleTimeout is the default time a workspace can be idle
@@ -2051,6 +2146,11 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 
 	session := sessions.GetOrCreateActive(msg.SessionKey)
 	sessions.UpdateUserMeta(msg.SessionKey, msg.UserName, msg.ChatName)
+	e.auditMessage(msg, AuditEventMessageUser, "user", msg.Content, map[string]any{
+		"from_voice":  msg.FromVoice,
+		"image_count": len(msg.Images),
+		"file_count":  len(msg.Files),
+	})
 	if !session.TryLock() {
 		if e.stopCurrentMessageIfRecalled(interactiveKey) {
 			if e.waitForSessionLock(session, recalledStopLockWait) {
@@ -2135,6 +2235,11 @@ func (e *Engine) maybeAutoResetSessionOnIdle(p Platform, msg *Message, sessions 
 	session.UnlockWithoutUpdate()
 
 	newSession := sessions.NewSession(msg.SessionKey, "")
+	e.auditEvent(msg, AuditEventSessionRotated, AuditEvent{
+		Result:    "created",
+		SessionID: newSession.ID,
+		Reason:    "idle_timeout",
+	})
 	if !newSession.TryLock() {
 		slog.Error("failed to lock new session after idle auto-reset", "session_key", msg.SessionKey, "new_session", newSession.ID)
 		return nil
@@ -2349,6 +2454,14 @@ func (e *Engine) handlePendingPermission(p Platform, msg *Message, content strin
 			slog.Error("failed to send AskUserQuestion response", "error", err)
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
 		} else {
+			e.auditEvent(msg, AuditEventPermissionApproved, AuditEvent{
+				Result: "approved",
+				Reason: pending.ToolName,
+				Metadata: map[string]any{
+					"request_id": pending.RequestID,
+					"mode":       "ask_user_question",
+				},
+			})
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf("✅ %s: **%s**", q.Question, answer))
 		}
 
@@ -2373,6 +2486,14 @@ func (e *Engine) handlePendingPermission(p Platform, msg *Message, content strin
 			slog.Error("failed to send permission response", "error", err)
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
 		} else {
+			e.auditEvent(msg, AuditEventPermissionApproved, AuditEvent{
+				Result: "approved",
+				Reason: pending.ToolName,
+				Metadata: map[string]any{
+					"request_id": pending.RequestID,
+					"mode":       "approve_all",
+				},
+			})
 			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPermissionApproveAll))
 		}
 	} else if isAllowResponse(lower) {
@@ -2383,6 +2504,14 @@ func (e *Engine) handlePendingPermission(p Platform, msg *Message, content strin
 			slog.Error("failed to send permission response", "error", err)
 			e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
 		} else {
+			e.auditEvent(msg, AuditEventPermissionApproved, AuditEvent{
+				Result: "approved",
+				Reason: pending.ToolName,
+				Metadata: map[string]any{
+					"request_id": pending.RequestID,
+					"mode":       "allow",
+				},
+			})
 			e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPermissionAllowed))
 		}
 	} else if isDenyResponse(lower) {
@@ -2392,6 +2521,13 @@ func (e *Engine) handlePendingPermission(p Platform, msg *Message, content strin
 		}); err != nil {
 			slog.Error("failed to send deny response", "error", err)
 		}
+		e.auditEvent(msg, AuditEventPermissionDenied, AuditEvent{
+			Result: "denied",
+			Reason: pending.ToolName,
+			Metadata: map[string]any{
+				"request_id": pending.RequestID,
+			},
+		})
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPermissionDenied))
 	} else {
 		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPermissionHint))
@@ -3087,7 +3223,6 @@ func buildCardContent(thinking string, tools []cardToolEntry, answer string) str
 	return sb.String()
 }
 
-
 // unsolicitedReaderStopTimeout bounds how long stopUnsolicitedReader waits
 // for the reader goroutine to exit. The reader is structured so its iterations
 // are short (blocking adapter calls like RespondPermission are offloaded), so
@@ -3292,6 +3427,16 @@ func (e *Engine) runUnsolicitedReader(ctx context.Context, cancel context.Cancel
 				// any unsolicited AddHistory.
 				session.AddHistory("assistant", fullResponse)
 				sessions.Save()
+				if strings.TrimSpace(fullResponse) != "" {
+					e.auditEvent(&Message{
+						SessionKey: sessionKey,
+						Platform:   p.Name(),
+					}, AuditEventMessageAgent, AuditEvent{
+						Result:  "sent",
+						Role:    "assistant",
+						Content: fullResponse,
+					})
+				}
 
 				// Reset for potential subsequent unsolicited turn.
 				textParts = nil
@@ -3430,8 +3575,8 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 	// Streaming card: aggregate entire turn into a single updatable card.
 	var streamCard StreamingCard
-	var cardToolCalls []cardToolEntry // track tool calls for card content
-	var cardThinkingText string       // latest thinking text
+	var cardToolCalls []cardToolEntry  // track tool calls for card content
+	var cardThinkingText string        // latest thinking text
 	var cardAnswerText strings.Builder // accumulated answer text
 
 	if scp, ok := state.platform.(StreamingCardPlatform); ok {
@@ -3934,6 +4079,17 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 				"request_id", event.RequestID,
 				"tool", event.ToolName,
 			)
+			e.auditEvent(&Message{
+				SessionKey: sessionKey,
+				Platform:   p.Name(),
+			}, AuditEventPermissionRequested, AuditEvent{
+				Reason: event.ToolName,
+				Result: "requested",
+				Metadata: map[string]any{
+					"request_id": event.RequestID,
+					"tool_input": truncateIf(event.ToolInput, 500),
+				},
+			})
 
 			pending := &pendingPermission{
 				RequestID:    event.RequestID,
@@ -4201,6 +4357,16 @@ func (e *Engine) processInteractiveEvents(state *interactiveState, session *Sess
 
 			if elapsed := time.Since(replyStart); elapsed >= slowPlatformSend {
 				slog.Warn("slow final reply send", "platform", p.Name(), "elapsed", elapsed, "response_len", len(fullResponse))
+			}
+			if !isSilent {
+				e.auditEvent(&Message{
+					SessionKey: sessionKey,
+					Platform:   p.Name(),
+				}, AuditEventMessageAgent, AuditEvent{
+					Result:  "sent",
+					Role:    "assistant",
+					Content: fullResponse,
+				})
 			}
 
 			// TTS: async voice reply if enabled (skipped for silent replies)
@@ -4475,6 +4641,14 @@ channelClosed:
 				}
 			}
 		}
+		e.auditEvent(&Message{
+			SessionKey: sessionKey,
+			Platform:   p.Name(),
+		}, AuditEventMessageAgent, AuditEvent{
+			Result:  "sent",
+			Role:    "assistant",
+			Content: fullResponse,
+		})
 	}
 }
 
@@ -4570,6 +4744,16 @@ func (e *Engine) drainPendingMessages(state *interactiveState, session *Session,
 		drainEvents(state.agentSession.Events())
 
 		session.AddHistory("user", queued.content)
+		e.auditEvent(&Message{
+			SessionKey: queued.msgSessionKey,
+			Platform:   queued.msgPlatform,
+			UserID:     queued.userID,
+			UserName:   queued.userName,
+		}, AuditEventMessageUser, AuditEvent{
+			Role:    "user",
+			Content: queued.content,
+			Result:  "queued_resumed",
+		})
 
 		sendDone := make(chan error, 1)
 		go func() {
@@ -4741,6 +4925,11 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 	}
 
 	if cmdID != "" && disabledCmds[cmdID] {
+		e.auditEvent(msg, AuditEventCommandBlocked, AuditEvent{
+			Command: cmdID,
+			Result:  "blocked",
+			Reason:  "disabled",
+		})
 		slog.Info("audit: command_blocked",
 			"user_id", msg.UserID, "platform", msg.Platform,
 			"project", e.name, "command", cmdID, "reason", "disabled")
@@ -4749,6 +4938,11 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 	}
 
 	if cmdID != "" && privilegedCommands[cmdID] && !e.isAdmin(msg.UserID) {
+		e.auditEvent(msg, AuditEventCommandBlocked, AuditEvent{
+			Command: cmdID,
+			Result:  "blocked",
+			Reason:  "unauthorized",
+		})
 		slog.Info("audit: command_blocked",
 			"user_id", msg.UserID, "platform", msg.Platform,
 			"project", e.name, "command", cmdID, "reason", "unauthorized")
@@ -4757,6 +4951,10 @@ func (e *Engine) handleCommand(p Platform, msg *Message, raw string) bool {
 	}
 
 	if cmdID != "" {
+		e.auditEvent(msg, AuditEventCommandExecuted, AuditEvent{
+			Command: cmdID,
+			Result:  "executed",
+		})
 		slog.Info("audit: command_executed",
 			"user_id", msg.UserID, "platform", msg.Platform,
 			"project", e.name, "command", cmdID)
@@ -5145,6 +5343,11 @@ func (e *Engine) cmdNew(p Platform, msg *Message, args []string) {
 		name = strings.Join(args, " ")
 	}
 	sessions.NewSession(msg.SessionKey, name)
+	e.auditEvent(msg, AuditEventSessionCreated, AuditEvent{
+		Result:  "created",
+		Reason:  "command_new",
+		Content: name,
+	})
 	if name != "" {
 		e.reply(p, msg.ReplyCtx, fmt.Sprintf(e.i18n.T(MsgNewSessionCreatedName), name))
 	} else {
@@ -5308,6 +5511,12 @@ func (e *Engine) cmdSwitch(p Platform, msg *Message, args []string) {
 
 	session := sessions.SwitchToAgentSession(msg.SessionKey, matched.ID, agent.Name(), matched.Summary)
 	session.ClearHistory()
+	e.auditEvent(msg, AuditEventSessionSwitched, AuditEvent{
+		Result:         "switched",
+		SessionID:      session.ID,
+		AgentSessionID: matched.ID,
+		Content:        matched.Summary,
+	})
 
 	shortID := matched.ID
 	if len(shortID) > 12 {
@@ -12448,6 +12657,11 @@ func (e *Engine) deleteSingleSessionReply(msg *Message, deleter SessionDeleter, 
 	// Keep local session snapshot aligned with agent-side deletion.
 	sessions.DeleteByAgentSessionID(matched.ID)
 	sessions.SetSessionName(matched.ID, "")
+	e.auditEvent(msg, AuditEventSessionDeleted, AuditEvent{
+		Result:         "deleted",
+		AgentSessionID: matched.ID,
+		Content:        displayName,
+	})
 	return fmt.Sprintf(e.i18n.T(MsgDeleteSuccess), displayName)
 }
 

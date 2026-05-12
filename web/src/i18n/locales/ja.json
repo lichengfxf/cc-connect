@@ -8,6 +8,7 @@
     "cron": "Cron",
     "bridge": "ブリッジ",
     "skills": "スキル",
+    "audit": "監査",
     "system": "システム"
   },
   "dashboard": {
@@ -83,6 +84,16 @@
     "bridgeConnecting": "接続中...",
     "bridgeDisconnected": "未接続",
     "bridgeNotAvailable": "ブリッジが利用できません。config.toml で [bridge] を有効にしてください。"
+  },
+  "audit": {
+    "title": "監査",
+    "search": "検索",
+    "project": "プロジェクト",
+    "platform": "プラットフォーム",
+    "type": "イベント種別",
+    "detail": "イベント詳細",
+    "empty": "監査イベントがありません",
+    "total": "合計 {{total}} 件"
   },
   "providers": {
     "title": "プロバイダー",

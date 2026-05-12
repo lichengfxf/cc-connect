@@ -8,6 +8,7 @@
     "cron": "定时任务",
     "bridge": "桥接",
     "skills": "技能",
+    "audit": "审计",
     "system": "系统"
   },
   "dashboard": {
@@ -83,6 +84,16 @@
     "bridgeConnecting": "连接中...",
     "bridgeDisconnected": "未连接",
     "bridgeNotAvailable": "Bridge 未启用。请在 config.toml 中启用 [bridge] 以支持网页聊天。"
+  },
+  "audit": {
+    "title": "审计",
+    "search": "搜索",
+    "project": "项目",
+    "platform": "平台",
+    "type": "事件类型",
+    "detail": "事件详情",
+    "empty": "暂无审计事件",
+    "total": "共 {{total}} 条事件"
   },
   "providers": {
     "title": "模型提供方",

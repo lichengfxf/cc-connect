@@ -24,10 +24,14 @@ class ApiClient {
     return h;
   }
 
-  async request<T = any>(method: string, path: string, body?: any, params?: Record<string, string>): Promise<T> {
+  async request<T = any>(method: string, path: string, body?: any, params?: Record<string, string | undefined>): Promise<T> {
     let url = `${API_BASE}${path}`;
     if (params) {
-      const qs = new URLSearchParams(params).toString();
+      const clean: Record<string, string> = {};
+      for (const [k, v] of Object.entries(params)) {
+        if (v !== undefined && v !== '') clean[k] = v;
+      }
+      const qs = new URLSearchParams(clean).toString();
       if (qs) url += `?${qs}`;
     }
     const res = await fetch(url, {
@@ -46,7 +50,7 @@ class ApiClient {
     return json.data as T;
   }
 
-  get<T = any>(path: string, params?: Record<string, string>) { return this.request<T>('GET', path, undefined, params); }
+  get<T = any>(path: string, params?: Record<string, string | undefined>) { return this.request<T>('GET', path, undefined, params); }
   post<T = any>(path: string, body?: any) { return this.request<T>('POST', path, body); }
   put<T = any>(path: string, body?: any) { return this.request<T>('PUT', path, body); }
   patch<T = any>(path: string, body?: any) { return this.request<T>('PATCH', path, body); }

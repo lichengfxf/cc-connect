@@ -8,6 +8,7 @@
     "cron": "排程工作",
     "bridge": "橋接",
     "skills": "技能",
+    "audit": "稽核",
     "system": "系統"
   },
   "dashboard": {
@@ -83,6 +84,16 @@
     "bridgeConnecting": "連線中...",
     "bridgeDisconnected": "未連線",
     "bridgeNotAvailable": "Bridge 未啟用。請在 config.toml 中啟用 [bridge] 以支援網頁聊天。"
+  },
+  "audit": {
+    "title": "稽核",
+    "search": "搜尋",
+    "project": "專案",
+    "platform": "平台",
+    "type": "事件類型",
+    "detail": "事件詳情",
+    "empty": "沒有稽核事件",
+    "total": "共 {{total}} 筆事件"
   },
   "providers": {
     "title": "模型供應商",

@@ -45,6 +45,7 @@ type ManagementServer struct {
 	cronScheduler      *CronScheduler
 	heartbeatScheduler *HeartbeatScheduler
 	bridgeServer       *BridgeServer
+	auditor            Auditor
 
 	setupFeishuSave      func(req FeishuSetupSaveRequest) error
 	setupWeixinSave      func(req WeixinSetupSaveRequest) error
@@ -89,6 +90,7 @@ func (m *ManagementServer) RegisterEngine(name string, e *Engine) {
 func (m *ManagementServer) SetCronScheduler(cs *CronScheduler)           { m.cronScheduler = cs }
 func (m *ManagementServer) SetHeartbeatScheduler(hs *HeartbeatScheduler) { m.heartbeatScheduler = hs }
 func (m *ManagementServer) SetBridgeServer(bs *BridgeServer)             { m.bridgeServer = bs }
+func (m *ManagementServer) SetAuditor(a Auditor)                         { m.auditor = a }
 func (m *ManagementServer) SetSetupFeishuSave(fn func(FeishuSetupSaveRequest) error) {
 	m.setupFeishuSave = fn
 }
@@ -141,10 +143,10 @@ type GlobalProviderInfo struct {
 		Model string `json:"model"`
 		Alias string `json:"alias,omitempty"`
 	} `json:"models,omitempty"`
-	Endpoints       map[string]string              `json:"endpoints,omitempty"`
-	AgentModels     map[string]string              `json:"agent_models,omitempty"`
-	AgentModelLists map[string][]GlobalModelEntry   `json:"agent_model_lists,omitempty"`
-	Codex           *GlobalCodexConfig              `json:"codex,omitempty"`
+	Endpoints       map[string]string             `json:"endpoints,omitempty"`
+	AgentModels     map[string]string             `json:"agent_models,omitempty"`
+	AgentModelLists map[string][]GlobalModelEntry `json:"agent_model_lists,omitempty"`
+	Codex           *GlobalCodexConfig            `json:"codex,omitempty"`
 }
 
 // GlobalModelEntry is a model entry inside AgentModelLists.
@@ -246,6 +248,9 @@ func (m *ManagementServer) buildHandler(mux *http.ServeMux) http.Handler {
 
 	// Bridge
 	mux.HandleFunc(prefix+"/bridge/adapters", m.wrap(m.handleBridgeAdapters))
+	mux.HandleFunc(prefix+"/audit/events", m.wrap(m.handleAuditEvents))
+	mux.HandleFunc(prefix+"/audit/events/", m.wrap(m.handleAuditEventDetail))
+	mux.HandleFunc(prefix+"/audit/export", m.wrap(m.handleAuditExport))
 
 	// Static file serving for cc-connect-web (SPA)
 	return m.withStaticFallback(mux)
@@ -373,6 +378,43 @@ func mgmtError(w http.ResponseWriter, status int, msg string) {
 
 func mgmtOK(w http.ResponseWriter, msg string) {
 	mgmtJSON(w, http.StatusOK, map[string]string{"message": msg})
+}
+
+func parseAuditFilter(r *http.Request) AuditFilter {
+	q := r.URL.Query()
+	f := AuditFilter{
+		Project:    strings.TrimSpace(q.Get("project")),
+		UserID:     strings.TrimSpace(q.Get("user")),
+		UserName:   strings.TrimSpace(q.Get("user_name")),
+		Platform:   strings.TrimSpace(q.Get("platform")),
+		EventType:  strings.TrimSpace(q.Get("type")),
+		Command:    strings.TrimSpace(q.Get("command")),
+		Result:     strings.TrimSpace(q.Get("result")),
+		SessionKey: strings.TrimSpace(q.Get("session_key")),
+		SessionID:  strings.TrimSpace(q.Get("session_id")),
+		Query:      strings.TrimSpace(q.Get("q")),
+	}
+	if v := strings.TrimSpace(q.Get("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Limit = n
+		}
+	}
+	if v := strings.TrimSpace(q.Get("offset")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Offset = n
+		}
+	}
+	if v := strings.TrimSpace(q.Get("from")); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			f.From = t
+		}
+	}
+	if v := strings.TrimSpace(q.Get("to")); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			f.To = t
+		}
+	}
+	return f
 }
 
 // ── System endpoints ──────────────────────────────────────────
@@ -1600,6 +1642,74 @@ func (m *ManagementServer) handleBridgeAdapters(w http.ResponseWriter, r *http.R
 	mgmtJSON(w, http.StatusOK, map[string]any{"adapters": adapters})
 }
 
+func (m *ManagementServer) handleAuditEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		mgmtError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	if m.auditor == nil {
+		mgmtJSON(w, http.StatusOK, AuditListResult{Items: []AuditEvent{}, Limit: 50, Offset: 0, Total: 0})
+		return
+	}
+	result, err := m.auditor.List(parseAuditFilter(r))
+	if err != nil {
+		mgmtError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	mgmtJSON(w, http.StatusOK, result)
+}
+
+func (m *ManagementServer) handleAuditEventDetail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		mgmtError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	if m.auditor == nil {
+		mgmtError(w, http.StatusNotFound, "audit not enabled")
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/v1/audit/events/")
+	if id == "" {
+		mgmtError(w, http.StatusBadRequest, "missing event id")
+		return
+	}
+	ev, err := m.auditor.Get(id)
+	if err != nil {
+		if os.IsNotExist(err) {
+			mgmtError(w, http.StatusNotFound, "audit event not found")
+			return
+		}
+		mgmtError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	mgmtJSON(w, http.StatusOK, map[string]any{"event": ev})
+}
+
+func (m *ManagementServer) handleAuditExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		mgmtError(w, http.StatusMethodNotAllowed, "GET only")
+		return
+	}
+	if m.auditor == nil {
+		mgmtError(w, http.StatusNotFound, "audit not enabled")
+		return
+	}
+	filter := parseAuditFilter(r)
+	format := strings.TrimSpace(r.URL.Query().Get("format"))
+	if format == "" {
+		format = "jsonl"
+	}
+	data, contentType, err := m.auditor.Export(filter, format)
+	if err != nil {
+		mgmtError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"audit-export.%s\"", strings.ToLower(format)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
 func (m *ManagementServer) listBridgeAdapters() []map[string]any {
 	if m.bridgeServer == nil {
 		return nil
@@ -1859,10 +1969,10 @@ func (m *ManagementServer) handleCCSwitchProviders(w http.ResponseWriter, r *htt
 // applying per-agent-type overrides for base_url, model, and models.
 func resolveGlobalProviderForAgent(g GlobalProviderInfo, agentType string) ProviderConfig {
 	pc := ProviderConfig{
-		Name:   g.Name,
-		APIKey: g.APIKey,
+		Name:    g.Name,
+		APIKey:  g.APIKey,
 		BaseURL: g.BaseURL,
-		Model:  g.Model,
+		Model:   g.Model,
 	}
 	if ep, ok := g.Endpoints[agentType]; ok && ep != "" {
 		pc.BaseURL = ep

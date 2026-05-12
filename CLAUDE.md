@@ -1,5 +1,9 @@
 # CC-Connect Development Guide
 
+## 变更记录
+
+2026-05-12 19:28:00 - 新增文件审计与 Web 审计页，补齐 AI 回复审计记录，并增加本机一键编译部署脚本。
+
 ## Project Overview
 
 CC-Connect is a bridge that connects AI coding agents (Claude Code, Codex, Gemini CLI, Cursor, etc.) with messaging platforms (Feishu/Lark, Telegram, Discord, Slack, DingTalk, WeChat Work, QQ, LINE). Users interact with their coding agent through their preferred messaging app.
