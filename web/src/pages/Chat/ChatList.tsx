@@ -3,13 +3,15 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { MessageSquare, Bot, User, Circle, ArrowRight } from 'lucide-react';
 import { Card, EmptyState, Badge } from '@/components/ui';
-import { listProjects, type ProjectSummary } from '@/api/projects';
-import { listSessions, type Session } from '@/api/sessions';
-
-interface ChatEntry {
-  project: ProjectSummary;
-  latestSession: Session | null;
-}
+import { listProjects } from '@/api/projects';
+import { listSessions } from '@/api/sessions';
+import {
+  buildChatSessionHref,
+  flattenProjectSessions,
+  getSessionDisplayName,
+  getSessionSubtitle,
+  type SessionWithProject,
+} from './sessionViewModel';
 
 function timeAgo(iso: string, t: (k: string) => string): string {
   if (!iso) return '';
@@ -24,36 +26,25 @@ function timeAgo(iso: string, t: (k: string) => string): string {
 
 export default function ChatList() {
   const { t } = useTranslation();
-  const [entries, setEntries] = useState<ChatEntry[]>([]);
+  const [sessions, setSessions] = useState<SessionWithProject[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
       const { projects: projs } = await listProjects();
-      if (!projs?.length) {
-        setEntries([]);
-        return;
-      }
+      if (!projs?.length) return setSessions([]);
       const results = await Promise.all(
         projs.map(async (p) => {
           try {
             const { sessions } = await listSessions(p.name);
-            const sorted = (sessions || []).sort(
-              (a, b) => (b.updated_at || b.created_at || '').localeCompare(a.updated_at || a.created_at || ''),
-            );
-            return { project: p, latestSession: sorted[0] || null };
+            return { project: p.name, sessions: sessions || [] };
           } catch {
-            return { project: p, latestSession: null };
+            return { project: p.name, sessions: [] };
           }
         }),
       );
-      results.sort((a, b) => {
-        const ta = a.latestSession?.updated_at || a.latestSession?.created_at || '';
-        const tb = b.latestSession?.updated_at || b.latestSession?.created_at || '';
-        return tb.localeCompare(ta);
-      });
-      setEntries(results);
+      setSessions(flattenProjectSessions(results));
     } finally {
       setLoading(false);
     }
@@ -66,7 +57,7 @@ export default function ChatList() {
     return () => window.removeEventListener('cc:refresh', handler);
   }, [fetchData]);
 
-  if (loading && entries.length === 0) {
+  if (loading && sessions.length === 0) {
     return <div className="flex items-center justify-center h-64 text-gray-400 animate-pulse">Loading...</div>;
   }
 
@@ -74,23 +65,34 @@ export default function ChatList() {
     <div className="animate-fade-in space-y-4 ">
       <h2 className="text-lg font-bold text-gray-900 dark:text-white">{t('nav.chat')}</h2>
 
-      {entries.length === 0 ? (
+      {sessions.length === 0 ? (
         <EmptyState message={t('chat.noChats')} icon={MessageSquare} />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {entries.map(({ project, latestSession }) => {
-            const hasLive = latestSession?.live;
-            const lastMsg = latestSession?.last_message;
-            const ts = latestSession?.updated_at || latestSession?.created_at || '';
+          {sessions.map((session) => {
+            const hasLive = session.live;
+            const lastMsg = session.last_message;
+            const ts = session.updated_at || session.created_at || '';
 
             return (
-              <Link key={project.name} to={`/chat/${project.name}`}>
+              <Link key={`${session.project}-${session.id}`} to={buildChatSessionHref(session.project, session.id)}>
                 <Card hover className="h-full flex flex-col">
                   <div className="flex items-start justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <MessageSquare size={18} className="text-accent" />
-                      <h3 className="font-semibold text-gray-900 dark:text-white">{project.name}</h3>
-                      {hasLive && <Circle size={6} className="fill-emerald-500 text-emerald-500" />}
+                    <div className="min-w-0 flex items-start gap-2.5">
+                      <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent/10">
+                        <MessageSquare size={16} className="text-accent" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-semibold text-gray-900 dark:text-white truncate">
+                            {getSessionDisplayName(session)}
+                          </h3>
+                          {hasLive && <Circle size={6} className="fill-emerald-500 text-emerald-500 shrink-0" />}
+                        </div>
+                        <p className="mt-1 text-[11px] text-gray-400 dark:text-gray-500 truncate">
+                          {getSessionSubtitle(session)}
+                        </p>
+                      </div>
                     </div>
                     <ArrowRight size={16} className="text-gray-300 dark:text-gray-600" />
                   </div>
@@ -112,16 +114,13 @@ export default function ChatList() {
                     )}
                   </div>
 
-                  <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400 mt-auto pt-3 border-t border-gray-100 dark:border-gray-800">
+                  <div className="mt-auto flex items-center justify-between border-t border-gray-100 pt-3 text-xs text-gray-500 dark:border-gray-800 dark:text-gray-400">
                     <div className="flex items-center gap-1.5">
-                      <Badge className="text-[9px]">{project.agent_type}</Badge>
-                      {project.platforms?.slice(0, 2).map((pl) => <Badge key={pl}>{pl}</Badge>)}
-                      {(project.platforms?.length ?? 0) > 2 && (
-                        <Badge>+{project.platforms!.length - 2}</Badge>
-                      )}
+                      {session.agent_type && <Badge className="text-[9px]">{session.agent_type}</Badge>}
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span>{project.sessions_count} {t('chat.sessions', 'sessions')}</span>
+                    <div className="flex items-center gap-2 text-[11px]">
+                      <span>{session.history_count}</span>
+                      <span className="text-gray-300 dark:text-gray-600">•</span>
                       {ts && <span className="text-gray-400">{timeAgo(ts, t)}</span>}
                     </div>
                   </div>

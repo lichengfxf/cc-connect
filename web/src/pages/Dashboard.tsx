@@ -9,6 +9,12 @@ import { getStatus, type SystemStatus } from '@/api/status';
 import { listProjects, type ProjectSummary } from '@/api/projects';
 import { listSessions, type Session } from '@/api/sessions';
 import { formatUptime, formatTime } from '@/lib/utils';
+import {
+  buildChatSessionHref,
+  flattenProjectSessions,
+  getSessionDisplayName,
+  getSessionSubtitle,
+} from '@/pages/Chat/sessionViewModel';
 
 const MAX_ITEMS = 4;
 
@@ -32,15 +38,13 @@ export default function Dashboard() {
       const sessResults = await Promise.allSettled(
         projs.map(proj => listSessions(proj.name).then(r => ({ project: proj.name, sessions: r.sessions || [] })))
       );
-      const allSessions: (Session & { project: string })[] = [];
+      const projectSessions: Array<{ project: string; sessions: Session[] }> = [];
       for (const r of sessResults) {
         if (r.status === 'fulfilled') {
-          for (const sess of r.value.sessions) {
-            allSessions.push({ ...sess, project: r.value.project });
-          }
+          projectSessions.push(r.value);
         }
       }
-      allSessions.sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+      const allSessions = flattenProjectSessions(projectSessions);
       setRecentSessions(allSessions.slice(0, MAX_ITEMS));
     } catch (e: any) {
       setError(e.message);
@@ -94,7 +98,7 @@ export default function Dashboard() {
             {projects.slice(0, MAX_ITEMS).map((p) => (
               <Link
                 key={p.name}
-                to={`/chat/${p.name}`}
+                to={`/projects/${p.name}`}
                 className="block p-4 rounded-xl border border-gray-200/80 dark:border-white/[0.06] bg-white dark:bg-white/[0.02] hover:border-accent/40 hover:shadow-md hover:shadow-accent/5 transition-all"
               >
                 <div className="flex items-center gap-2.5 mb-3">
@@ -141,16 +145,20 @@ export default function Dashboard() {
             {recentSessions.map((sess) => (
               <Link
                 key={`${sess.project}-${sess.id}`}
-                to={`/chat/${sess.project}`}
+                to={buildChatSessionHref(sess.project, sess.id)}
                 className="block p-4 rounded-xl border border-gray-200/80 dark:border-white/[0.06] bg-white dark:bg-white/[0.02] hover:border-accent/40 hover:shadow-md hover:shadow-accent/5 transition-all"
               >
-                <div className="flex items-center gap-2.5 mb-3">
-                  <div className={`w-2 h-2 rounded-full shrink-0 ${sess.active ? 'bg-green-400' : 'bg-gray-300 dark:bg-gray-600'}`} />
-                  <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                    {sess.name || sess.id}
-                  </p>
+                <div className="mb-3 flex items-start gap-2.5">
+                  <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ${sess.active ? 'bg-green-400' : 'bg-gray-300 dark:bg-gray-600'}`} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                      {getSessionDisplayName(sess)}
+                    </p>
+                    <p className="mt-1 text-[11px] text-gray-400 truncate">
+                      {getSessionSubtitle(sess)}
+                    </p>
+                  </div>
                 </div>
-                <Badge className="text-xs mb-2">{sess.project}</Badge>
                 {sess.last_message && (
                   <p className="text-xs text-gray-400 truncate mb-2">
                     {sess.last_message.content.slice(0, 60)}

@@ -33,6 +33,7 @@ export default function App() {
         <Route path="skills" element={<SkillList />} />
         <Route path="chat" element={<ChatList />} />
         <Route path="chat/:name" element={<ChatView />} />
+        <Route path="chat/:name/:sessionId" element={<ChatView />} />
         <Route path="cron" element={<CronList />} />
         <Route path="audit" element={<AuditList />} />
         <Route path="system" element={<SystemConfig />} />

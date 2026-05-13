@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Send, User, Bot, Circle, WifiOff,
   Copy, Check, FileText, Image as ImageIcon, Loader2,
@@ -19,6 +19,7 @@ import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { cn } from '@/lib/utils';
+import { buildChatSessionHref, getSessionDisplayName, sortSessionsByRecent } from './sessionViewModel';
 
 // ── Markdown renderers ───────────────────────────────────────
 
@@ -289,7 +290,8 @@ function MsgCopyButton({ text }: { text: string }) {
 
 export default function ChatView() {
   const { t } = useTranslation();
-  const { name: projectName } = useParams<{ name: string }>();
+  const { name: projectName, sessionId } = useParams<{ name: string; sessionId?: string }>();
+  const navigate = useNavigate();
 
   // Session state
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -335,15 +337,14 @@ export default function ChatView() {
         fetchBridgeConfig(),
       ]);
       setBridgeCfg(cfg);
-      const sorted = (allSessions || []).sort(
-        (a, b) => (b.updated_at || b.created_at || '').localeCompare(a.updated_at || a.created_at || ''),
-      );
+      const sorted = sortSessionsByRecent(allSessions || []);
       setSessions(sorted);
 
       if (sorted.length > 0) {
-        const latest = sorted[0];
-        const detail = await getSession(projectName, latest.id, 200);
+        const selected = sorted.find((session) => session.id === sessionId) || sorted[0];
+        const detail = await getSession(projectName, selected.id, 200);
         setCurrentSession(detail);
+        setUserPickedSession(Boolean(sessionId));
         if (detail.history) {
           setMessages(detail.history.map((h, i) => ({
             id: `hist-${i}`,
@@ -356,11 +357,12 @@ export default function ChatView() {
       } else {
         setCurrentSession(null);
         setMessages([]);
+        setUserPickedSession(false);
       }
     } finally {
       setLoading(false);
     }
-  }, [projectName]);
+  }, [projectName, sessionId]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -376,6 +378,7 @@ export default function ChatView() {
     setLoading(true);
     setUserPickedSession(true);
     try {
+      navigate(buildChatSessionHref(projectName, s.id));
       const detail = await getSession(projectName, s.id, 200);
       setCurrentSession(detail);
       if (detail.history) {
@@ -392,7 +395,7 @@ export default function ChatView() {
     } finally {
       setLoading(false);
     }
-  }, [projectName]);
+  }, [navigate, projectName]);
 
   // Handle bridge incoming messages — only process messages for the current session
   const handleBridgeMessage = useCallback((msg: BridgeIncoming) => {
@@ -560,10 +563,11 @@ export default function ChatView() {
   const handleNewSession = useCallback(() => {
     if (bridgeStatus !== 'connected') return;
     setUserPickedSession(false);
+    if (projectName) navigate(`/chat/${encodeURIComponent(projectName)}`);
     setMessages(prev => [...prev, { id: `user-${Date.now()}`, role: 'user', content: '/new' }]);
     bridgeSend('/new');
     setDrawerOpen(false);
-  }, [bridgeStatus, bridgeSend]);
+  }, [bridgeStatus, bridgeSend, navigate, projectName]);
 
   const canSend = bridgeStatus === 'connected';
 
@@ -589,9 +593,7 @@ export default function ChatView() {
               onClick={() => setDrawerOpen(true)}
               className="flex items-center gap-1 text-xs text-gray-500 hover:text-accent transition-colors mt-0.5"
             >
-              <span>{userPickedSession && currentSession
-                ? (currentSession.name || currentSession.id.slice(0, 8))
-                : t('chat.defaultSession')}</span>
+              <span>{currentSession ? getSessionDisplayName(currentSession) : t('chat.defaultSession')}</span>
               <ChevronDown size={12} />
             </button>
           </div>

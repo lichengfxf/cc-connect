@@ -5,6 +5,7 @@ import {
 import { Badge } from '@/components/ui';
 import type { Session } from '@/api/sessions';
 import { cn } from '@/lib/utils';
+import { getSessionDisplayName, getSessionSubtitle } from './sessionViewModel';
 
 function timeAgo(iso: string): string {
   if (!iso) return '';
@@ -94,9 +95,14 @@ export default function SessionDrawer({ open, onClose, sessions, currentSessionI
                         size={13}
                         className={cn(s.live ? 'text-accent' : 'text-gray-400', 'shrink-0')}
                       />
-                      <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                        {s.name || s.user_name || s.id.slice(0, 8)}
-                      </span>
+                      <div className="min-w-0">
+                        <span className="block text-sm font-medium text-gray-900 dark:text-white truncate">
+                          {getSessionDisplayName(s)}
+                        </span>
+                        <span className="block text-[10px] text-gray-400 truncate mt-0.5">
+                          {getSessionSubtitle({ ...s, project: '' }).replace(/^ \/ /, '')}
+                        </span>
+                      </div>
                       {s.live && <Circle size={4} className="fill-emerald-500 text-emerald-500 shrink-0" />}
                     </div>
                     <span className="text-[10px] text-gray-400 shrink-0 mt-0.5">
