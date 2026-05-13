@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.3.3-beta.3 (2026-05-13)
+
+Beta release with web chat session UX updates. No breaking changes.
+
+### Fixed
+- **Web chat sessions**: flatten the chat page across all projects, show participant names more clearly, and make recent-session cards open the exact target session instead of the project default session
+
 ## v1.3.3-beta.2 (2026-05-09)
 
 Beta release with Slack Assistant API, DingTalk improvements, MAX platform webhook mode, and numerous platform fixes. No breaking changes.
