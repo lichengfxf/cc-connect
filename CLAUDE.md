@@ -2,6 +2,8 @@
 
 ## 变更记录
 
+2026-05-13 10:47:00 - 忽略 TypeScript 增量编译缓存文件，并将 web/tsconfig.tsbuildinfo 从版本控制中移除。
+
 2026-05-12 19:28:00 - 新增文件审计与 Web 审计页，补齐 AI 回复审计记录，并增加本机一键编译部署脚本。
 
 ## Project Overview
