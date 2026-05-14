@@ -33,6 +33,79 @@ const isQRPlatform = (type: string) => type === 'feishu' || type === 'lark' || t
 
 type Tab = 'overview' | 'providers' | 'heartbeat' | 'settings';
 
+type PermissionModeOption = {
+  value: string;
+  label: string;
+};
+
+const CLAUDE_MODE_OPTIONS: PermissionModeOption[] = [
+  { value: 'default', label: 'default' },
+  { value: 'acceptEdits', label: 'acceptEdits (edit)' },
+  { value: 'plan', label: 'plan' },
+  { value: 'bypassPermissions', label: 'bypassPermissions (yolo)' },
+  { value: 'dontAsk', label: 'dontAsk' },
+];
+
+const CODEX_MODE_OPTIONS: PermissionModeOption[] = [
+  { value: 'suggest', label: 'suggest' },
+  { value: 'auto-edit', label: 'auto-edit' },
+  { value: 'full-auto', label: 'full-auto' },
+  { value: 'yolo', label: 'yolo' },
+];
+
+const FALLBACK_MODE_OPTIONS = CLAUDE_MODE_OPTIONS;
+
+function permissionModeOptionsFor(agentType: string): PermissionModeOption[] {
+  switch (agentType) {
+    case 'codex':
+      return CODEX_MODE_OPTIONS;
+    case 'claudecode':
+      return CLAUDE_MODE_OPTIONS;
+    default:
+      return FALLBACK_MODE_OPTIONS;
+  }
+}
+
+function normalizeProjectMode(agentType: string, mode: string): string {
+  const trimmed = mode.trim();
+  switch (agentType) {
+    case 'codex':
+      switch (trimmed) {
+        case '':
+        case 'default':
+        case 'suggest':
+          return 'suggest';
+        case 'bypassPermissions':
+          return 'yolo';
+        case 'acceptEdits':
+          return 'auto-edit';
+        case 'auto-edit':
+        case 'full-auto':
+        case 'yolo':
+          return trimmed;
+        default:
+          return 'suggest';
+      }
+    case 'claudecode':
+      switch (trimmed) {
+        case '':
+        case 'suggest':
+          return 'default';
+        case 'yolo':
+          return 'bypassPermissions';
+        case 'default':
+        case 'acceptEdits':
+        case 'plan':
+        case 'dontAsk':
+          return trimmed;
+        default:
+          return 'default';
+      }
+    default:
+      return trimmed || 'default';
+  }
+}
+
 export default function ProjectDetail() {
   const { t } = useTranslation();
   const { name } = useParams<{ name: string }>();
@@ -82,6 +155,9 @@ export default function ProjectDetail() {
   const navigate = useNavigate();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const currentAgentType = selectedAgentType || project?.agent_type || '';
+  const modeOptions = permissionModeOptionsFor(currentAgentType);
+  const visibleAgentMode = normalizeProjectMode(currentAgentType, agentMode);
 
   const handleDeleteProject = async () => {
     if (!name) return;
@@ -181,7 +257,7 @@ export default function ProjectDetail() {
         admin_from: adminFrom,
         disabled_commands: disabledCmds.split(',').map(s => s.trim()).filter(Boolean),
         work_dir: workDir,
-        mode: agentMode,
+        mode: normalizeProjectMode(currentAgentType, agentMode),
         ...(agentTypeChanged ? { agent_type: selectedAgentType } : {}),
         show_context_indicator: showCtxIndicator,
         reply_footer: replyFooter,
@@ -512,15 +588,15 @@ export default function ProjectDetail() {
                 {t('projects.agentMode', 'Permission mode')}
               </label>
               <select
-                value={agentMode}
+                value={visibleAgentMode}
                 onChange={(e) => setAgentMode(e.target.value)}
                 className="w-full px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-accent/50"
               >
-                <option value="default">default</option>
-                <option value="acceptEdits">acceptEdits (edit)</option>
-                <option value="plan">plan</option>
-                <option value="bypassPermissions">bypassPermissions (yolo)</option>
-                <option value="dontAsk">dontAsk</option>
+                {modeOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
               </select>
             </div>
           </div>

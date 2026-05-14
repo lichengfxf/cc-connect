@@ -55,3 +55,26 @@ func TestGetModel_PrefersActiveProviderModel(t *testing.T) {
 		t.Fatalf("GetModel() = %q, want gpt-5.4", got)
 	}
 }
+
+func TestNormalizeModeAliases(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "", want: "suggest"},
+		{input: "default", want: "suggest"},
+		{input: "suggest", want: "suggest"},
+		{input: "auto-edit", want: "auto-edit"},
+		{input: "full-auto", want: "full-auto"},
+		{input: "yolo", want: "yolo"},
+		{input: "bypassPermissions", want: "yolo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := normalizeMode(tt.input); got != tt.want {
+				t.Fatalf("normalizeMode(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
