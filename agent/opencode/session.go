@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-"path/filepath"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,32 +24,37 @@ import (
 // Each Send() launches a new `opencode run --format json` process
 // with --session for conversation continuity.
 type opencodeSession struct {
-	cmd      string
-	workDir  string
-	model    string
-	mode     string
-	extraEnv []string
-	events   chan core.Event
-	chatID   atomic.Value // stores string — OpenCode session ID
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	alive    atomic.Bool
+	cmd               string
+	extraArgs         []string // extra args from cmd, prepended before opencode args
+	workDir           string
+	model             string
+	mode              string
+	agentName         string
+	extraEnv          []string
+	events            chan core.Event
+	chatID            atomic.Value // stores string — OpenCode session ID
+	ctx               context.Context
+	cancel            context.CancelFunc
+	wg                sync.WaitGroup
+	alive             atomic.Bool
 	expectingContinue atomic.Bool // true when compaction_continue received, waiting for next step
+	resultSent        atomic.Bool // true when EventResult has been sent for this turn
 }
 
-func newOpencodeSession(ctx context.Context, cmd, workDir, model, mode, resumeID string, extraEnv []string) (*opencodeSession, error) {
+func newOpencodeSession(ctx context.Context, cmd string, extraArgs []string, workDir, model, mode, agentName, resumeID string, extraEnv []string) (*opencodeSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	s := &opencodeSession{
-		cmd:      cmd,
-		workDir:  workDir,
-		model:    model,
-		mode:     mode,
-		extraEnv: extraEnv,
-		events:   make(chan core.Event, 64),
-		ctx:      sessionCtx,
-		cancel:   cancel,
+		cmd:       cmd,
+		extraArgs: extraArgs,
+		workDir:   workDir,
+		model:     model,
+		mode:      mode,
+		agentName: agentName,
+		extraEnv:  extraEnv,
+		events:    make(chan core.Event, 64),
+		ctx:       sessionCtx,
+		cancel:    cancel,
 	}
 	s.alive.Store(true)
 
@@ -60,9 +65,9 @@ func newOpencodeSession(ctx context.Context, cmd, workDir, model, mode, resumeID
 	return s, nil
 }
 
-func (s *opencodeSession) Send(prompt string, images []core.ImageAttachment, files []core.FileAttachment) error {
+func (s *opencodeSession) Send(prompt string, messageID string, images []core.ImageAttachment, files []core.FileAttachment) error {
 	if len(files) > 0 {
-		filePaths := core.SaveFilesToDisk(s.workDir, files)
+		filePaths := core.SaveFilesToDisk(s.workDir, messageID, files)
 		prompt = core.AppendFileRefs(prompt, filePaths)
 	}
 	prompt, imagePaths, err := s.stageImages(prompt, images)
@@ -72,6 +77,9 @@ func (s *opencodeSession) Send(prompt string, images []core.ImageAttachment, fil
 	if !s.alive.Load() {
 		return fmt.Errorf("session is closed")
 	}
+
+	s.resultSent.Store(false)
+	s.expectingContinue.Store(false)
 
 	chatID := s.CurrentSessionID()
 	isResume := chatID != ""
@@ -95,6 +103,7 @@ func (s *opencodeSession) Send(prompt string, images []core.ImageAttachment, fil
 
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
+	cmd.Stdin = strings.NewReader(prompt)
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("opencodeSession: start: %w", err)
@@ -148,10 +157,13 @@ func opencodeImageExt(mimeType string) string {
 }
 
 func (s *opencodeSession) buildRunArgs(prompt string, imagePaths []string, chatID string) []string {
-	args := []string{"run", "--format", "json"}
+	args := append(append([]string{}, s.extraArgs...), "run", "--format", "json")
 
 	if chatID != "" {
 		args = append(args, "--session", chatID)
+	}
+	if s.agentName != "" {
+		args = append(args, "--agent", s.agentName)
 	}
 	if s.model != "" {
 		args = append(args, "--model", s.model)
@@ -163,6 +175,12 @@ func (s *opencodeSession) buildRunArgs(prompt string, imagePaths []string, chatI
 	// Enable thinking blocks.
 	args = append(args, "--thinking")
 
+	// In yolo/auto mode, skip permission prompts entirely so headless
+	// runs don't get stuck with auto-rejected external-directory ops.
+	if s.mode == "yolo" {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+
 	for _, imagePath := range imagePaths {
 		if imagePath == "" {
 			continue
@@ -170,9 +188,6 @@ func (s *opencodeSession) buildRunArgs(prompt string, imagePaths []string, chatI
 		args = append(args, "--file", imagePath)
 	}
 
-	// Use "--" to separate flags from the positional prompt so that
-	// --file (yargs [array]) does not greedily consume the prompt text.
-	args = append(args, "--", prompt)
 	return args
 }
 
@@ -224,7 +239,7 @@ func (s *opencodeSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBu
 		return
 	}
 
-// Check if we received compaction_continue before readLoop ended.
+	// Check if we received compaction_continue before readLoop ended.
 	// If so, OpenCode will continue with a new turn - do NOT send EventResult.
 	// The subsequent process will send its own EventResult when it finishes.
 	if s.expectingContinue.Load() {
@@ -233,14 +248,8 @@ func (s *opencodeSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBu
 		return
 	}
 
-	// Emit EventResult after all steps are done and the process has finished writing.
-	sid := s.CurrentSessionID()
-	slog.Debug("opencodeSession: readLoop complete, sending fallback EventResult", "session_id", sid)
-	evt := core.Event{Type: core.EventResult, SessionID: sid, Done: true}
-	select {
-	case s.events <- evt:
-	case <-s.ctx.Done():
-	}
+	slog.Debug("opencodeSession: readLoop complete, sending fallback EventResult", "session_id", s.CurrentSessionID())
+	s.sendEventResult()
 }
 
 // OpenCode NDJSON event structure:
@@ -342,6 +351,24 @@ func (s *opencodeSession) handleToolUse(raw map[string]any) {
 		case <-s.ctx.Done():
 			return
 		}
+
+		// When a tool call is rejected (e.g. permission denied in default mode),
+		// opencode exits without generating any follow-up text. Surface the rejection
+		// reason so the engine has something meaningful to send rather than "(空响应)".
+		// This covers the common case where the user has not configured tool permissions
+		// and needs guidance to use mode="yolo" or update opencode settings.
+		if status == "error" && state != nil {
+			errMsg, _ := state["error"].(string)
+			if errMsg != "" {
+				slog.Info("opencodeSession: tool rejected, surfacing error as text", "tool", toolName, "error", errMsg)
+				errEvt := core.Event{Type: core.EventText, Content: errMsg}
+				select {
+				case s.events <- errEvt:
+				case <-s.ctx.Done():
+					return
+				}
+			}
+		}
 	}
 }
 
@@ -439,11 +466,13 @@ func extractErrorMessage(raw map[string]any) string {
 }
 
 func (s *opencodeSession) handleStepStart(raw map[string]any) {
-	part, _ := raw["part"].(map[string]any)
-	if part == nil {
-		return
+	sessionID, _ := raw["sessionID"].(string)
+	if sessionID == "" {
+		part, _ := raw["part"].(map[string]any)
+		if part != nil {
+			sessionID, _ = part["sessionID"].(string)
+		}
 	}
-	sessionID, _ := part["sessionID"].(string)
 	if sessionID != "" {
 		s.chatID.Store(sessionID)
 		slog.Debug("opencodeSession: session started", "session_id", sessionID)
@@ -452,8 +481,29 @@ func (s *opencodeSession) handleStepStart(raw map[string]any) {
 
 func (s *opencodeSession) handleStepFinish(raw map[string]any) {
 	part, _ := raw["part"].(map[string]any)
-	reason, _ := part["reason"].(string)
+	reason := ""
+	if part != nil {
+		reason, _ = part["reason"].(string)
+	}
 	slog.Debug("opencodeSession: step finished", "reason", reason, "session_id", s.CurrentSessionID())
+
+	if reason == "stop" {
+		s.sendEventResult()
+	}
+}
+
+func (s *opencodeSession) sendEventResult() {
+	if s.resultSent.Load() {
+		slog.Debug("opencodeSession: EventResult already sent, skipping", "session_id", s.CurrentSessionID())
+		return
+	}
+	s.resultSent.Store(true)
+	sid := s.CurrentSessionID()
+	evt := core.Event{Type: core.EventResult, SessionID: sid, Done: true}
+	select {
+	case s.events <- evt:
+	case <-s.ctx.Done():
+	}
 }
 
 // RespondPermission is a no-op — OpenCode handles permissions internally.
@@ -484,10 +534,10 @@ func (s *opencodeSession) Close() error {
 	}()
 	select {
 	case <-done:
+		close(s.events)
 	case <-time.After(8 * time.Second):
 		slog.Warn("opencodeSession: close timed out, abandoning wg.Wait")
 	}
-	close(s.events)
 	return nil
 }
 

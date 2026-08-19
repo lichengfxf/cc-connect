@@ -686,8 +686,21 @@ func (p *Platform) getAccessToken() (string, error) {
 		return "", fmt.Errorf("wecom: get token failed: %d %s", result.ErrCode, result.ErrMsg)
 	}
 
+	// Compute the cache window from expires_in with a 60-second safety
+	// margin. When the server omits or zeroes the field, fall back to
+	// WeCom's documented 7200s default; without this, the raw value would
+	// land at -60 and the cache would be stale on the very next call,
+	// turning every outbound API request into a fresh /gettoken round-trip.
+	expires := result.ExpiresIn
+	if expires <= 0 {
+		slog.Warn("wecom: missing/invalid expires_in in token response, defaulting to 7200s", "got", result.ExpiresIn)
+		expires = 7200
+	}
+	if expires > 60 {
+		expires -= 60
+	}
 	p.tokenCache.token = result.AccessToken
-	p.tokenCache.expiresAt = time.Now().Add(time.Duration(result.ExpiresIn-60) * time.Second)
+	p.tokenCache.expiresAt = time.Now().Add(time.Duration(expires) * time.Second)
 
 	slog.Debug("wecom: access_token refreshed", "expires_in", result.ExpiresIn)
 	return result.AccessToken, nil
@@ -878,28 +891,4 @@ func (p *Platform) downloadMedia(mediaID string) ([]byte, error) {
 	}
 	defer resp.Body.Close()
 	return io.ReadAll(resp.Body)
-}
-
-// splitByBytes splits text by UTF-8 byte length (WeChat Work limit is 2048 bytes).
-func splitByBytes(s string, maxBytes int) []string {
-	if len(s) <= maxBytes {
-		return []string{s}
-	}
-	var parts []string
-	for len(s) > 0 {
-		end := maxBytes
-		if end > len(s) {
-			end = len(s)
-		}
-		// Avoid splitting in the middle of a UTF-8 character
-		for end > 0 && end < len(s) && s[end]>>6 == 0b10 {
-			end--
-		}
-		if end == 0 {
-			end = maxBytes
-		}
-		parts = append(parts, s[:end])
-		s = s[end:]
-	}
-	return parts
 }
