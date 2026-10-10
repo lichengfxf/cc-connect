@@ -152,6 +152,8 @@ Desktop.ini
 secrets/
 credentials/
 
-.codex
+# Local Codex config; shared skills stay under version control
+.codex/*
+!.codex/skills/
 _tmp
 cc-connect-new
