@@ -9,8 +9,17 @@
 - [5. myagent 侧改动清单](#5-myagent-侧改动清单)
 - [6. cc-connect 侧改动清单](#6-cc-connect-侧改动清单)
 - [7. 风险与开放问题](#7-风险与开放问题)
-- [8. 待拍板决策](#8-待拍板决策)
-- [9. 建议默认定稿方向](#9-建议默认定稿方向)
+- [8. 决策落地](#8-决策落地)
+- [9. 定稿方向](#9-定稿方向)
+
+## 状态更新（2026-10-10）
+
+本文档写于「只出方案」阶段。路线 A 已被采纳，myagent 侧 `myagent acp` 已实现交付并通过四轮审查，因此第 1–2 节的「myagent 现状」描述（只有交互 / 单轮 / serve 三种形态、无跨进程锁、取消走信号）与第 5–6 节的实施清单都属于当时草案、**部分已过时**；最终落地状态与偏差以 [§8](#8-决策落地)、[§9](#9-定稿方向) 和 myagent 任务记录为准。
+
+- myagent 交付与审查记录：`/vm/project/gitee/myagent/_tasks/20261010-acp-agent-server/`（提交 `3bac7e6` → `bef60ba` → `99d6053` → `85c4a41` → `2df31fe`）。
+- 决策 D1–D5 的落地结果见 [§8](#8-决策落地)（2026-10-10 拍板）。
+- 工作空间 flock 早已存在于 `workspace.Open`，原「记忆并发写」风险作废。
+- cc-connect 侧唯一实质缺口是可选 `memory_file`；端到端已在 adapter 级（cc-connect `agent/acp` ↔ `myagent acp`）验证，引擎级（Engine + IM）待做。
 
 ## 1. 背景与证据
 
@@ -143,55 +152,30 @@ args = ["acp"]
 
 ## 7. 风险与开放问题
 
-- **记忆并发写**：myagent 工作空间 `events.jsonl` / `sessions.jsonl` 目前没有跨进程锁。ACP 每会话一个进程，同一 workspace 多会话（或与 `myagent serve` / 交互模式并存）时会并发写。需要加工作空间级 flock，或明确约定同一 workspace 同时只跑一个 myagent 进程；这是实现前必须确认项。
-- **system prompt 注入**：见第 6 节第 3 点；不做的话 myagent 在 IM 里不会知道可以使用 `cc-connect send` / cron 等能力。
-- **session/load 语义**：myagent 没有「会话 ID 可寻址历史」这一层现成抽象，需要把 ACP sessionId 映射到记忆 session 边界，或首期只做进程内续接并由记忆兜底。
-- **流式**：myagent 一次性拿完整回答，首期表现为整段返回，非逐字流式。
-- **图片 / 附件**：myagent 无多模态输入路径；cc-connect 会把图片落盘并在文本里附路径，需确认 myagent 是否接受。
-- **取消语义**：`session/cancel` 要能中断模型 HTTP 调用与工具执行；myagent 现有中断走信号，ACP 需要可被 RPC 触发。
+- ~~**记忆并发写**~~（已解决）：`workspace.Open` 早已对 `<workspace>/.myagent/tmp/lock` 加 `LOCK_EX|LOCK_NB` 独占锁，三种运行形态统一复用，同一 workspace 同时只允许一个可写实例。剩余语义影响是「多个 IM 会话绑同一项目会互相拒绝」，属 myagent 单会话语义的既定边界。
+- **system prompt 注入**（仍开放）：见第 6 节第 3 点。不做 `memory_file` 时 myagent 在 IM 里不知道可以使用 `cc-connect send` / cron 等能力，这是 cc-connect 侧唯一的实质缺口。
+- ~~**session/load 语义**~~（已按决策 D2 落地）：首期 `loadSession=false`，进程内 history 从空开始（保证客户端 `/new` 清空上下文），长期上下文由 myagent 记忆按轮注入；`/list`、`/switch` 对 myagent 基本不可用。
+- **流式**（已接受为边界）：回答整段一次性推送，非逐字流式；工具事件仍提供过程感。
+- **图片 / 附件**（待实测）：myagent 无多模态输入路径，预期走「cc-connect 落盘 + 文本附路径」的文本路径，但未做引擎级验证。
+- ~~**取消语义**~~（已解决）：`session/cancel` 经 `context.WithCancelCause` 中断模型 HTTP 与工具执行，turn 以 `stopReason=cancelled` 收尾、进程继续存活；取消登记竞态与停机竞态已在审查中发现并修复，附确定性用例。
 
-## 8. 待拍板决策
+## 8. 决策落地
 
-1. 决策项：用哪种方式接入。
-   建议：A —— myagent 实现 ACP，cc-connect 复用 `agent/acp`。
-   备选：A / B（cc-connect 新写 serve WS 适配器）/ C（双方自造 stdio 协议）。
-   理由：ACP 是 cc-connect 既定扩展点且客户端已成熟；myagent 一次实现可被 Zed 等其它 ACP 客户端复用；B 与 cc-connect 多会话模型冲突且仍要改 myagent 才能审批；C 复用最少、维护成本最高。
-   影响：A 把主要工作量放在 myagent（中等偏大），cc-connect 侧近乎零；B/C 会引入长期私有协议维护。
-   需要你拍板：是否采用 A。
+2026-10-10 拍板结果如下：
 
-2. 决策项：首期怎样处理「跨进程续接」。
-   建议：首期 advertise `loadSession=false`，靠 myagent 的记忆自动恢复 + cc-connect 新会话；`session/load` 放到后续迭代。
-   备选：(a) 首期只做会话内续接（推荐，先跑通闭环）；(b) 首期就实现 `session/load`（把 ACP sessionId 映射到记忆 session 边界）。
-   理由：(a) 能最快验证端到端价值，且 myagent 记忆系统本来就会在工作空间维度恢复上下文；(b) 会让首期多一层会话寻址设计。
-   影响：影响 cc-connect `/list`、`/switch`、重启续接的体验完整度。
-   需要你拍板：选 (a) 还是 (b)。
+1. **接入方式：采用 A** —— myagent 实现 ACP，cc-connect 复用 `agent/acp`。已落地，cc-connect 侧不需要新适配器；myagent 的实现见 `src/internal/acp/` + `src/cmd/myagent/acp.go`。
+2. **跨进程续接：采用 (a)** —— `initialize` advertise `loadSession=false`，进程内 history 从空开始（保证客户端 `/new` 真正清空上下文），长期上下文靠 myagent 记忆按轮注入。`session/load` 留待后续；影响 cc-connect 的 `/list`、`/switch` 与重启后的短期上下文。
+3. **工具审批：采用 (a)** —— 转发到 IM。判定顺序为 `full_auto` 放行 → `auto_approve` 前缀放行 → `confirm_by_default=false` 拒绝 → 其余发 `session/request_permission` 阻塞等待；allow / reject / cancelled 均在真实 cc-connect 客户端下验证过。
+4. **`memory_file` 选项：未落地（仍待拍板）** —— 不做则 cc-connect `/setup` 对 myagent 无效，`cc-connect send`、cron/timer 等能力说明不会进入 myagent 上下文。
+5. **首期范围：最小闭环** —— `session/list`、模式 / 模型切换返回 `-32601`。实现过程中额外补了工具输出回传（`tool_call_update.content`）与 `tool_call.title` 兜底，属超出原设计的增益。
 
-3. 决策项：工具审批语义。
-   建议：ACP `session/request_permission` 转发到 IM；先套用 myagent 现有 `auto_approve` 前缀白名单自动放行，未命中才弹 IM 审批，`full_auto` 全放行。
-   备选：(a) 转发 IM 审批（推荐）；(b) 只用白名单静默放行/拒绝（不弹审批，最省事但体验差）。
-   理由：(a) 与其它 agent 的 IM 审批体验一致，也让人类能授权白名单外的命令。
-   影响：影响安全边界与使用体验；`full_auto` 仍是「任意 shell」高危开关。
-   需要你拍板：选 (a) 还是 (b)。
+## 9. 定稿方向
 
-4. 决策项：是否给 cc-connect 的 `agent/acp` 增加 `memory_file`（`AGENTS.md`）选项，让 `/setup` 能注入 cc-connect 能力说明。
-   建议：加。
-   备选：加 / 不加（改为手工把说明写进工作空间 AGENTS.md）。
-   理由：不加的话 myagent 在 IM 里不知道有 `cc-connect send` / cron，附件与定时任务能力会整体缺失。
-   影响：约十几行 cc-connect 代码 + 测试；不加则是可感知的功能缺口。
-   需要你拍板：是否加。
-
-5. 决策项：首期范围是否包含 `session/list`、模式/模型切换、多会话并存。
-   建议：首期都不做，`session/list` 与模式切换返回 `-32601`。
-   备选：仅最小闭环（推荐）/ 连 `session/list` 一起做 / 全做。
-   理由：先以最小闭环验证价值，避免一次性铺开。
-   影响：影响 cc-connect `/list` 与 `/mode` 的可用性，但不影响主对话链路。
-   需要你拍板：最小闭环还是包含 `session/list`。
-
-## 9. 建议默认定稿方向
+上述决策形成的定稿方向（均已执行）：
 
 - 路线 A（myagent 实现 ACP），cc-connect 仅做配置示例 + 可选 `memory_file`。
 - 首期限定：`initialize` / `session/new` / `session/prompt` / `session/update` / `session/cancel` / `session/request_permission`。
 - 审批走 IM，保留 `auto_approve` 白名单与 `full_auto` 语义。
-- 记忆并发写防护作为实现前的前置项，在 myagent 侧解决。
+- 记忆并发写防护：myagent 侧已有工作空间 flock，无需新增。
 
-若你认可上述建议，可直接回复「全部按建议执行」，我会据此细化并开始改造（先 myagent ACP 最小闭环，再 cc-connect 侧示例、文档与测试）。
+剩余动作见任务 [README](README.md) 的「下一步」：`memory_file` 选项（待拍板）、`config.example.toml` 示例、README 点名 myagent、引擎级验证。
