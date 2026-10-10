@@ -460,6 +460,7 @@ cc-connect update --pre     # Include pre-releases
 | Agent | Copilot (GitHub) | ✅ Supported |
 | Agent | ACP (Agent Client Protocol) | ✅ Any [ACP-compatible agent](https://agentclientprotocol.com/get-started/agents) |
 | Agent | Devin (Cognition) | ✅ Supported (via ACP) |
+| Agent | myagent | ✅ Supported (via ACP) |
 | Agent | Goose (Block) | 🔜 Planned |
 | Agent | Aider | 🔜 Planned |
 | Platform | Feishu (Lark) | ✅ WebSocket — no public IP needed |

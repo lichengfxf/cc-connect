@@ -29,6 +29,14 @@ type Agent struct {
 	authMethod   string // optional, e.g. "cursor_login" for Cursor CLI (see authenticate RPC)
 	displayName  string // optional, for doctor (default "ACP")
 
+	// memoryFile / globalMemoryFile are optional instruction-file paths for
+	// core.MemoryFileProvider (e.g. "AGENTS.md" for myagent, which injects
+	// the workspace AGENTS.md into its system prompt). Relative paths resolve
+	// against the current work_dir; empty means the agent does not advertise
+	// memory-file support, so /memory and /cron setup keep behaving as before.
+	memoryFile       string
+	globalMemoryFile string
+
 	// mode is the pending permission mode to apply to new sessions.
 	// When set, StartSession applies it via session/set_mode right after
 	// session/new. Empty means "use whatever the agent selects by default".
@@ -45,9 +53,9 @@ type Agent struct {
 	// handshake so that future PermissionModes() calls can reflect the
 	// actual modes this specific ACP agent offers (rather than a
 	// hard-coded fallback that may not match).
-	modesMu       sync.RWMutex
-	modesCache    []core.PermissionModeInfo
-	modesCurrent  string
+	modesMu      sync.RWMutex
+	modesCache   []core.PermissionModeInfo
+	modesCurrent string
 
 	mu sync.RWMutex
 }
@@ -64,10 +72,14 @@ type sessionCallbacks interface {
 // Ensure *Agent satisfies sessionCallbacks at compile time.
 var _ sessionCallbacks = (*Agent)(nil)
 
+// Ensure *Agent advertises memory-file support to the engine (/memory, /cron setup).
+var _ core.MemoryFileProvider = (*Agent)(nil)
+
 // New builds an acp agent from project options.
 // Required: options["command"] — executable name or path for the ACP agent.
 // Optional: options["args"], options["env"], options["auth_method"],
-// options["display_name"], options["mode"].
+// options["display_name"], options["mode"], options["memory_file"],
+// options["global_memory_file"].
 func New(opts map[string]any) (core.Agent, error) {
 	workDir, _ := opts["work_dir"].(string)
 	if workDir == "" {
@@ -93,18 +105,31 @@ func New(opts map[string]any) (core.Agent, error) {
 	}
 	mode, _ := opts["mode"].(string)
 	mode = strings.TrimSpace(mode)
+	memoryFile := strings.TrimSpace(stringOpt(opts, "memory_file"))
+	globalMemoryFile := strings.TrimSpace(stringOpt(opts, "global_memory_file"))
 
 	return &Agent{
-		workDir:     workDir,
-		cmd:          cmdStr,
-		cliExtraArgs: cliExtraArgs,
-		args:        args,
-		staticEnv:   staticEnv,
-		extraEnv:    extra,
-		authMethod:  authMethod,
-		displayName: displayName,
-		mode:        mode,
+		workDir:          workDir,
+		cmd:              cmdStr,
+		cliExtraArgs:     cliExtraArgs,
+		args:             args,
+		staticEnv:        staticEnv,
+		extraEnv:         extra,
+		authMethod:       authMethod,
+		displayName:      displayName,
+		memoryFile:       memoryFile,
+		globalMemoryFile: globalMemoryFile,
+		mode:             mode,
 	}, nil
+}
+
+// stringOpt reads a string option; non-string values are ignored (treated as
+// unset) rather than coerced into a bogus path.
+func stringOpt(opts map[string]any, key string) string {
+	if s, ok := opts[key].(string); ok {
+		return s
+	}
+	return ""
 }
 
 func envMapFromOpts(opts map[string]any) map[string]string {
@@ -190,6 +215,51 @@ func (a *Agent) GetWorkDir() string {
 	return a.workDir
 }
 
+// -- MemoryFileProvider --
+//
+// memory_file / global_memory_file are opt-in: when unset both getters return
+// "", which the engine treats exactly like an agent that does not implement
+// MemoryFileProvider ("memory file not supported" for /memory and /cron setup).
+
+// ProjectMemoryFile returns the project-level instruction file, resolving
+// relative paths against the current work_dir.
+func (a *Agent) ProjectMemoryFile() string {
+	a.mu.RLock()
+	configured := a.memoryFile
+	a.mu.RUnlock()
+	return a.resolveMemoryPath(configured)
+}
+
+// GlobalMemoryFile returns the user-level instruction file, resolved the same
+// way as ProjectMemoryFile.
+func (a *Agent) GlobalMemoryFile() string {
+	a.mu.RLock()
+	configured := a.globalMemoryFile
+	a.mu.RUnlock()
+	return a.resolveMemoryPath(configured)
+}
+
+// resolveMemoryPath expands a configured instruction-file path: absolute paths
+// are cleaned and used as-is, relative paths are joined onto the current
+// work_dir, and an empty configuration stays empty.
+func (a *Agent) resolveMemoryPath(configured string) string {
+	configured = strings.TrimSpace(configured)
+	if configured == "" {
+		return ""
+	}
+	if filepath.IsAbs(configured) {
+		return filepath.Clean(configured)
+	}
+	dir := a.GetWorkDir()
+	if dir == "" {
+		dir = "."
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	return filepath.Join(dir, configured)
+}
+
 func (a *Agent) WorkspaceAgentOptions() map[string]any {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -212,6 +282,12 @@ func (a *Agent) WorkspaceAgentOptions() map[string]any {
 	}
 	if a.displayName != "" {
 		opts["display_name"] = a.displayName
+	}
+	if a.memoryFile != "" {
+		opts["memory_file"] = a.memoryFile
+	}
+	if a.globalMemoryFile != "" {
+		opts["global_memory_file"] = a.globalMemoryFile
 	}
 	return opts
 }

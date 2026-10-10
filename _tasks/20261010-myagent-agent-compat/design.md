@@ -19,7 +19,7 @@
 - myagent 交付与审查记录：`/vm/project/gitee/myagent/_tasks/20261010-acp-agent-server/`（提交 `3bac7e6` → `bef60ba` → `99d6053` → `85c4a41` → `2df31fe`）。
 - 决策 D1–D5 的落地结果见 [§8](#8-决策落地)（2026-10-10 拍板）。
 - 工作空间 flock 早已存在于 `workspace.Open`，原「记忆并发写」风险作废。
-- cc-connect 侧唯一实质缺口是可选 `memory_file`；端到端已在 adapter 级（cc-connect `agent/acp` ↔ `myagent acp`）验证，引擎级（Engine + IM）待做。
+- cc-connect 侧的 `memory_file` 与配置示例**已落地**（`agent/acp`、`config.example.toml`、README / CHANGELOG）；端到端已在 adapter 级（cc-connect `agent/acp` ↔ `myagent acp`）与 Engine 级 `/cron setup` 验证，真实 IM 平台的完整流程待做。详见 [README](README.md) 与 [代码审查](review.md)。
 
 ## 1. 背景与证据
 
@@ -34,7 +34,7 @@ cc-connect 侧：
   - `onServerRequest` 处理 `session/request_permission`，把工具审批转成 `core.EventPermissionRequest` 交给引擎，用户在 IM 回复后用 `pickPermissionOptionID` / `buildPermissionResult` 回填（`agent/acp/mapping.go:358-414`）。
   - `CancelTurn` 发 `session/cancel` 通知。
   - 每个 `StartSession` 独立启动一个 subprocess（`agent/acp/session.go`），因此服务端可以保持单会话实现。
-- ACP 适配器目前**未实现** `MemoryFileProvider` / `SystemPromptSupporter`，所以 cc-connect `/setup` 对 ACP agent 无 memory 文件可写，`AgentSystemPrompt()`（`core/interfaces.go:84`，含 `cc-connect send`、cron/timer 等能力说明）不会自动进入 ACP agent 的上下文。
+- （已被本次改动修正）ACP 适配器最初**未实现** `MemoryFileProvider`，因此 cc-connect 的 `/cron setup`、`/bind setup` 对 ACP agent 无指令文件可写，`AgentSystemPrompt()`（`core/interfaces.go:84`，含 `cc-connect send`、cron/timer 等能力说明）无法进入 ACP agent 的上下文。现已在 `agent/acp` 落地可选 `memory_file` / `global_memory_file`。
 
 myagent 侧：
 
@@ -147,13 +147,13 @@ args = ["acp"]
 
 1. `config.example.toml` 增加 myagent via ACP 示例。
 2. `README.md` / `README.zh-CN.md` 的 agent 列表或 ACP 说明里点名 myagent（可选）。
-3. **`memory_file` 选项（推荐做）**：给 `agent/acp` 增加可选 `memory_file`（默认空），实现 `core.MemoryFileProvider`。cc-connect `/setup` 会把 `AgentSystemPrompt()` 写入 `<work_dir>/<memory_file>`（myagent 场景填 `AGENTS.md`），补上 `cc-connect send`、cron/timer 等能力说明。纯 cc-connect 侧改动，不动 ACP 协议。
+3. **`memory_file` 选项（已落地）**：`agent/acp` 新增可选 `memory_file` / `global_memory_file`，实现 `core.MemoryFileProvider`。cc-connect 的 `/cron setup`、`/bind setup` 会把 `AgentSystemPrompt()` 写入 `<work_dir>/<memory_file>`（myagent 场景填 `AGENTS.md`），补上 `cc-connect send`、cron/timer 等能力说明。相对路径按 `work_dir` 解析、绝对路径原样；未配置时行为与「不支持指令文件」一致。纯 cc-connect 侧改动，不动 ACP 协议。
 4. 可选：`agent/acp` 增加 fake myagent ACP server 的集成测试，防止协议回归。
 
 ## 7. 风险与开放问题
 
 - ~~**记忆并发写**~~（已解决）：`workspace.Open` 早已对 `<workspace>/.myagent/tmp/lock` 加 `LOCK_EX|LOCK_NB` 独占锁，三种运行形态统一复用，同一 workspace 同时只允许一个可写实例。剩余语义影响是「多个 IM 会话绑同一项目会互相拒绝」，属 myagent 单会话语义的既定边界。
-- **system prompt 注入**（仍开放）：见第 6 节第 3 点。不做 `memory_file` 时 myagent 在 IM 里不知道可以使用 `cc-connect send` / cron 等能力，这是 cc-connect 侧唯一的实质缺口。
+- ~~**system prompt 注入**~~（已解决）：见第 6 节第 3 点。`memory_file` 落地后，`/cron setup`、`/bind setup` 可把 `cc-connect send` / cron 等能力说明写入 myagent 注入的 `AGENTS.md`。
 - ~~**session/load 语义**~~（已按决策 D2 落地）：首期 `loadSession=false`，进程内 history 从空开始（保证客户端 `/new` 清空上下文），长期上下文由 myagent 记忆按轮注入；`/list`、`/switch` 对 myagent 基本不可用。
 - **流式**（已接受为边界）：回答整段一次性推送，非逐字流式；工具事件仍提供过程感。
 - **图片 / 附件**（待实测）：myagent 无多模态输入路径，预期走「cc-connect 落盘 + 文本附路径」的文本路径，但未做引擎级验证。
@@ -166,7 +166,7 @@ args = ["acp"]
 1. **接入方式：采用 A** —— myagent 实现 ACP，cc-connect 复用 `agent/acp`。已落地，cc-connect 侧不需要新适配器；myagent 的实现见 `src/internal/acp/` + `src/cmd/myagent/acp.go`。
 2. **跨进程续接：采用 (a)** —— `initialize` advertise `loadSession=false`，进程内 history 从空开始（保证客户端 `/new` 真正清空上下文），长期上下文靠 myagent 记忆按轮注入。`session/load` 留待后续；影响 cc-connect 的 `/list`、`/switch` 与重启后的短期上下文。
 3. **工具审批：采用 (a)** —— 转发到 IM。判定顺序为 `full_auto` 放行 → `auto_approve` 前缀放行 → `confirm_by_default=false` 拒绝 → 其余发 `session/request_permission` 阻塞等待；allow / reject / cancelled 均在真实 cc-connect 客户端下验证过。
-4. **`memory_file` 选项：未落地（仍待拍板）** —— 不做则 cc-connect `/setup` 对 myagent 无效，`cc-connect send`、cron/timer 等能力说明不会进入 myagent 上下文。
+4. **`memory_file` 选项：已落地** —— `agent/acp` 实现 `core.MemoryFileProvider`，`/cron setup`、`/bind setup` 可写入 myagent 的 `AGENTS.md`；未配置时保持原有「不支持指令文件」行为。
 5. **首期范围：最小闭环** —— `session/list`、模式 / 模型切换返回 `-32601`。实现过程中额外补了工具输出回传（`tool_call_update.content`）与 `tool_call.title` 兜底，属超出原设计的增益。
 
 ## 9. 定稿方向
@@ -178,4 +178,4 @@ args = ["acp"]
 - 审批走 IM，保留 `auto_approve` 白名单与 `full_auto` 语义。
 - 记忆并发写防护：myagent 侧已有工作空间 flock，无需新增。
 
-剩余动作见任务 [README](README.md) 的「下一步」：`memory_file` 选项（待拍板）、`config.example.toml` 示例、README 点名 myagent、引擎级验证。
+剩余动作见任务 [README](README.md) 的「下一步」：真实 IM 平台的引擎级验证（`/new`、重启续接、附件、`/cron setup` 回执）。

@@ -1976,6 +1976,12 @@ app_secret = "your-feishu-app-secret"
 # Same agent type works for Cursor Agent CLI, OpenClaw bridge, GitHub Copilot CLI, etc.:
 # set command + args to match each tool's documented ACP entrypoint.
 # 同一 type=acp：通过 command/args 指向各工具文档中的 ACP 启动方式即可。
+# Optional: if the agent reads a project instruction file (AGENTS.md, CLAUDE.md, ...),
+# set memory_file to that path so cc-connect can write its capability notes into it
+# (`/cron setup`, `/bind setup`). Relative paths resolve against work_dir.
+# 可选：若 Agent 会读取项目指令文件（AGENTS.md / CLAUDE.md 等），用 memory_file 指向它，
+# cc-connect 就能通过 `/cron setup`、`/bind setup` 把自己的能力说明写进去；
+# 相对路径按 work_dir 解析。
 # For Devin specifically, prefer the dedicated `type = "devin"` section above.
 # 针对 Devin 建议直接使用上面的 type = "devin"；下面的 type = "acp" 主要给其他
 # 通用 ACP 工具使用。
@@ -2067,6 +2073,23 @@ app_secret = "your-feishu-app-secret"
 # args = ["--acp", "--stdio"]
 # display_name = "Copilot ACP"
 # # cmd = "/absolute/path/to/copilot"   # if not on PATH (see COPILOT_CLI_PATH in GitHub docs)
+
+# --- Example: myagent (ACP server via `myagent acp`) ---
+# myagent 自带 ACP 服务端（`myagent acp`），启动时会把工作空间 AGENTS.md 注入系统提示词。
+# 配置 memory_file 后，`/cron setup` / `/bind setup` 可把 cc-connect 能力说明（send、
+# cron/timer 等）写入该文件，myagent 才会知道这些能力。
+# [[projects]]
+# name = "myagent"
+#
+# [projects.agent]
+# type = "acp"
+#
+# [projects.agent.options]
+# work_dir = "/path/to/project"
+# cmd = "myagent"                 # 或 myagent 二进制的绝对路径
+# args = ["acp"]
+# memory_file = "AGENTS.md"       # 相对 work_dir 解析；myagent 默认注入该文件
+# display_name = "myagent"
 
 # [[projects.platforms]]
 # type = "telegram"

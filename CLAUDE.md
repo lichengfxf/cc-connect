@@ -2,6 +2,8 @@
 
 ## 变更记录
 
+2026-10-10 10:32:11 - 新增 ACP agent 的 `memory_file` / `global_memory_file` 配置项：`/cron setup`、`/bind setup` 可把 cc-connect 能力说明写入自定义 ACP Agent 的指令文件（如 myagent 的 AGENTS.md），未配置时行为不变；同步补充 myagent 的 ACP 配置示例。
+
 2026-05-15 07:46:46 - 修复 Codex 项目设置的权限模式保存与回填，YOLO 现在会按 Codex 兼容值正确保存并显示。
 
 2026-05-13 10:47:00 - 忽略 TypeScript 增量编译缓存文件，并将 web/tsconfig.tsbuildinfo 从版本控制中移除。

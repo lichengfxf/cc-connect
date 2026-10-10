@@ -16229,7 +16229,12 @@ func (e *Engine) cmdBind(p Platform, msg *Message, args []string) {
 
 	if _, ok := e.agent.(SystemPromptSupporter); !ok {
 		if mp, ok := e.agent.(MemoryFileProvider); ok {
-			reply += fmt.Sprintf(e.i18n.T(MsgRelaySetupHint), filepath.Base(mp.ProjectMemoryFile()))
+			// Agents may implement MemoryFileProvider but advertise no file
+			// (e.g. the ACP adapter without memory_file configured); only
+			// show the hint when there is an actual path.
+			if memPath := strings.TrimSpace(mp.ProjectMemoryFile()); memPath != "" {
+				reply += fmt.Sprintf(e.i18n.T(MsgRelaySetupHint), filepath.Base(memPath))
+			}
 		}
 	}
 

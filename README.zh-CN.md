@@ -458,6 +458,7 @@ cc-connect update --pre     # 含预发布版本
 | Agent | Copilot (GitHub) | ✅ 已支持 |
 | Agent | ACP (Agent Client Protocol) | ✅ 支持任何 [ACP 兼容 Agent](https://agentclientprotocol.com/get-started/agents) |
 | Agent | Devin (Cognition) | ✅ 已支持（通过 ACP）|
+| Agent | myagent | ✅ 已支持（通过 ACP）|
 | Agent | Goose (Block) | 🔜 计划中 |
 | Agent | Aider | 🔜 计划中 |
 | Platform | 飞书 (Lark) | ✅ WebSocket — 无需公网 IP |
