@@ -573,6 +573,15 @@ type ContextCompressor interface {
 	CompressCommand() string
 }
 
+// StatusCommandProvider is an optional interface for agents that have a native
+// status slash command. StatusCommand returns the native slash command (e.g.
+// "/status") that the engine forwards to the agent when the user sends /status.
+// Return "" if not supported, in which case /status keeps showing cc-connect's
+// own system status.
+type StatusCommandProvider interface {
+	StatusCommand() string
+}
+
 // AgentSessionCanceller is an optional interface for agent sessions that support
 // cancelling the current turn without terminating the session or its underlying
 // process. When implemented, the engine calls CancelTurn instead of Close() for

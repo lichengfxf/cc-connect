@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **ACP agent `status_command`**: new optional `status_command` option for `type = "acp"` agents. When set, the ACP adapter implements `core.StatusCommandProvider` and IM `/status` forwards the configured native slash command to the downstream agent as a session prompt — e.g. `status_command = "/status"` for myagent, whose ACP server reports its runtime status. Unset keeps the previous behavior (cc-connect's own system status).
 - **ACP agent `memory_file`**: new optional `memory_file` / `global_memory_file` options for `type = "acp"` agents. When set, cc-connect's `/cron setup` (and `/bind setup`) can write its capability notes (attachment sending, cron/timer, ...) into the agent's project instruction file — e.g. `memory_file = "AGENTS.md"` for myagent, which injects the workspace `AGENTS.md` into its system prompt. Absolute paths are used as-is, relative paths resolve against `work_dir`; unset keeps the previous behavior (memory file unsupported).
 - **`agent_session_idle_timeout_mins`**: new per-project config option that closes an idle live agent process after a clean turn while preserving the cc-connect session and saved agent session ID. The next message starts a new agent process and resumes the same conversation. Set to `0` or leave unset to disable (#1338).
 - **Reasonix agent**: new agent adapter for Reasonix multi-model coding agent, bridging via HTTP serve API (POST /submit, SSE /events, POST /approve). Supports default/yolo/plan permission modes, SSE auto-reconnect with backoff, and thinking accumulator. (#1281)

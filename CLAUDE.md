@@ -2,6 +2,8 @@
 
 ## 变更记录
 
+2026-10-13 - 新增 ACP agent 的 `status_command` 配置项：设置后 ACP 适配器实现 `core.StatusCommandProvider`，IM 的 `/status` 会转发该命令到下游 ACP Agent（如 myagent 的 `/status`）；未配置时维持展示 cc-connect 自身状态的旧行为不变。泛化 `runCompress` 为 `runForwardedCommand` 以复用命令转发与事件收集。
+
 2026-10-10 10:32:11 - 新增 ACP agent 的 `memory_file` / `global_memory_file` 配置项：`/cron setup`、`/bind setup` 可把 cc-connect 能力说明写入自定义 ACP Agent 的指令文件（如 myagent 的 AGENTS.md），未配置时行为不变；同步补充 myagent 的 ACP 配置示例。
 
 2026-05-15 07:46:46 - 修复 Codex 项目设置的权限模式保存与回填，YOLO 现在会按 Codex 兼容值正确保存并显示。

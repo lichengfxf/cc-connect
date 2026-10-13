@@ -37,6 +37,12 @@ type Agent struct {
 	memoryFile       string
 	globalMemoryFile string
 
+	// statusCommand is the optional native status slash command for
+	// core.StatusCommandProvider (e.g. "/status" for myagent). Empty means the
+	// agent does not advertise status support, so /status keeps showing
+	// cc-connect's own system status exactly as before.
+	statusCommand string
+
 	// mode is the pending permission mode to apply to new sessions.
 	// When set, StartSession applies it via session/set_mode right after
 	// session/new. Empty means "use whatever the agent selects by default".
@@ -75,11 +81,14 @@ var _ sessionCallbacks = (*Agent)(nil)
 // Ensure *Agent advertises memory-file support to the engine (/memory, /cron setup).
 var _ core.MemoryFileProvider = (*Agent)(nil)
 
+// Ensure *Agent advertises native status forwarding when status_command is set (/status).
+var _ core.StatusCommandProvider = (*Agent)(nil)
+
 // New builds an acp agent from project options.
 // Required: options["command"] — executable name or path for the ACP agent.
 // Optional: options["args"], options["env"], options["auth_method"],
 // options["display_name"], options["mode"], options["memory_file"],
-// options["global_memory_file"].
+// options["global_memory_file"], options["status_command"].
 func New(opts map[string]any) (core.Agent, error) {
 	workDir, _ := opts["work_dir"].(string)
 	if workDir == "" {
@@ -107,6 +116,7 @@ func New(opts map[string]any) (core.Agent, error) {
 	mode = strings.TrimSpace(mode)
 	memoryFile := strings.TrimSpace(stringOpt(opts, "memory_file"))
 	globalMemoryFile := strings.TrimSpace(stringOpt(opts, "global_memory_file"))
+	statusCommand := strings.TrimSpace(stringOpt(opts, "status_command"))
 
 	return &Agent{
 		workDir:          workDir,
@@ -119,6 +129,7 @@ func New(opts map[string]any) (core.Agent, error) {
 		displayName:      displayName,
 		memoryFile:       memoryFile,
 		globalMemoryFile: globalMemoryFile,
+		statusCommand:    statusCommand,
 		mode:             mode,
 	}, nil
 }
@@ -260,6 +271,22 @@ func (a *Agent) resolveMemoryPath(configured string) string {
 	return filepath.Join(dir, configured)
 }
 
+// -- StatusCommandProvider --
+//
+// status_command is opt-in: when unset StatusCommand returns "", which the
+// engine treats exactly like an agent that does not implement
+// StatusCommandProvider (cc-connect shows its own system status for /status).
+// The command is a native slash command owned by the downstream ACP agent
+// (e.g. "/status" for myagent); it is forwarded verbatim as a session prompt.
+
+// StatusCommand returns the configured native status slash command, or "" when
+// the agent does not support status forwarding.
+func (a *Agent) StatusCommand() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.statusCommand
+}
+
 func (a *Agent) WorkspaceAgentOptions() map[string]any {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -288,6 +315,9 @@ func (a *Agent) WorkspaceAgentOptions() map[string]any {
 	}
 	if a.globalMemoryFile != "" {
 		opts["global_memory_file"] = a.globalMemoryFile
+	}
+	if a.statusCommand != "" {
+		opts["status_command"] = a.statusCommand
 	}
 	return opts
 }

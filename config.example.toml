@@ -1982,6 +1982,13 @@ app_secret = "your-feishu-app-secret"
 # 可选：若 Agent 会读取项目指令文件（AGENTS.md / CLAUDE.md 等），用 memory_file 指向它，
 # cc-connect 就能通过 `/cron setup`、`/bind setup` 把自己的能力说明写进去；
 # 相对路径按 work_dir 解析。
+# Optional: if the agent has a native status slash command, set status_command so
+# IM `/status` forwards to the agent instead of showing cc-connect's own status.
+# Unset keeps the previous behavior (cc-connect system status). The value is
+# forwarded verbatim as a session prompt; e.g. myagent uses "/status".
+# 可选：若 Agent 自带状态命令，用 status_command 指定，IM 里的 `/status` 就会转发给
+# Agent（不再显示 cc-connect 自身状态）；不配置则维持旧行为。
+# 命令会原样作为 session prompt 发送，例如 myagent 用 "/status"。
 # For Devin specifically, prefer the dedicated `type = "devin"` section above.
 # 针对 Devin 建议直接使用上面的 type = "devin"；下面的 type = "acp" 主要给其他
 # 通用 ACP 工具使用。
@@ -2089,6 +2096,7 @@ app_secret = "your-feishu-app-secret"
 # cmd = "myagent"                 # 或 myagent 二进制的绝对路径
 # args = ["acp"]
 # memory_file = "AGENTS.md"       # 相对 work_dir 解析；myagent 默认注入该文件
+# status_command = "/status"      # IM /status 转发到 myagent 的运行状态
 # display_name = "myagent"
 
 # [[projects.platforms]]

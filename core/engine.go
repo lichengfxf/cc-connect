@@ -8716,6 +8716,11 @@ func (e *Engine) cmdCurrent(p Platform, msg *Message) {
 }
 
 func (e *Engine) cmdStatus(p Platform, msg *Message) {
+	// Agents with a native status command (e.g. myagent via status_command)
+	// take over /status; otherwise fall back to cc-connect's own system status.
+	if e.tryForwardStatusCommand(p, msg) {
+		return
+	}
 	if !supportsCards(p) {
 		agent, sessions, _, err := e.commandContext(p, msg)
 		if err != nil {
@@ -8806,6 +8811,53 @@ func (e *Engine) cmdStatus(p Platform, msg *Message) {
 	}
 
 	e.replyWithCard(p, msg.ReplyCtx, e.renderStatusCard(msg.SessionKey, msg.UserID))
+}
+
+// tryForwardStatusCommand forwards /status to an agent that advertises a native
+// status command (core.StatusCommandProvider + status_command). It returns true
+// when the command was handled (forwarded, or rejected with a clear message);
+// false lets the caller render cc-connect's own system status.
+func (e *Engine) tryForwardStatusCommand(p Platform, msg *Message) bool {
+	agent, sessions, _, err := e.commandContext(p, msg)
+	if err != nil {
+		return false
+	}
+	provider, ok := agent.(StatusCommandProvider)
+	if !ok {
+		return false
+	}
+	cmd := strings.TrimSpace(provider.StatusCommand())
+	if cmd == "" {
+		return false
+	}
+
+	iKey := e.interactiveKeyForSessionKey(msg.SessionKey)
+	e.interactiveMu.Lock()
+	state, hasState := e.interactiveStates[iKey]
+	e.interactiveMu.Unlock()
+
+	if !hasState || state == nil {
+		// Fallback: suffix scan for multi-workspace key mismatch
+		if found := e.findInteractiveKeyForSession(msg.SessionKey); found != "" && found != iKey {
+			e.interactiveMu.Lock()
+			state, hasState = e.interactiveStates[found]
+			e.interactiveMu.Unlock()
+		}
+	}
+
+	if !hasState || state == nil || state.agentSession == nil || !state.agentSession.Alive() {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgStatusNoSession))
+		return true
+	}
+
+	session := sessions.GetOrCreateActive(msg.SessionKey)
+	if !session.TryLock() {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgPreviousProcessing))
+		return true
+	}
+
+	go e.runForwardedCommand(state, session, sessions, iKey, p, msg.ReplyCtx, cmd, false, MsgStatusEmpty)
+	return true
 }
 
 func (e *Engine) cmdUsage(p Platform, msg *Message) {
@@ -10433,12 +10485,29 @@ func (e *Engine) cmdCompress(p Platform, msg *Message) {
 // runCompress sends the agent's compress command and handles results.
 // If autoTriggered is true, suppress user-visible "compressing" and completion messages.
 func (e *Engine) runCompress(state *interactiveState, session *Session, sessions *SessionManager, iKey string, p Platform, replyCtx any, auto bool) {
+	compressor, ok := e.agent.(ContextCompressor)
+	if !ok || compressor.CompressCommand() == "" {
+		session.Unlock()
+		if !auto {
+			e.reply(p, replyCtx, e.i18n.T(MsgCompressNotSupported))
+		}
+		return
+	}
+	e.runForwardedCommand(state, session, sessions, iKey, p, replyCtx, compressor.CompressCommand(), auto, MsgCompressDone)
+}
+
+// runForwardedCommand sends a native slash command owned by the downstream
+// agent and renders its reply. It is shared by /compress and /status
+// forwarding. The caller must have already locked session; this function owns
+// releasing it. emptyMsgKey is the i18n key used when the agent returns no
+// visible text.
+func (e *Engine) runForwardedCommand(state *interactiveState, session *Session, sessions *SessionManager, iKey string, p Platform, replyCtx any, cmd string, auto bool, emptyMsgKey MsgKey) {
 	// session.Unlock() is called inside drainQueuedMessagesAfterCompress
 	// while holding state.mu to close the race window. Deferred fallback
 	// ensures the lock is released on early-return paths.
-	compressUnlocked := false
+	unlocked := false
 	defer func() {
-		if !compressUnlocked {
+		if !unlocked {
 			session.Unlock()
 		}
 	}()
@@ -10453,15 +10522,6 @@ func (e *Engine) runCompress(state *interactiveState, session *Session, sessions
 
 	drainEvents(state.agentSession.Events())
 
-	compressor, ok := e.agent.(ContextCompressor)
-	if !ok || compressor.CompressCommand() == "" {
-		if !auto {
-			e.reply(p, replyCtx, e.i18n.T(MsgCompressNotSupported))
-		}
-		return
-	}
-
-	cmd := compressor.CompressCommand()
 	if err := state.agentSession.Send(cmd, "", nil, nil); err != nil {
 		if !auto {
 			e.reply(p, replyCtx, fmt.Sprintf(e.i18n.T(MsgError), err))
@@ -10472,13 +10532,13 @@ func (e *Engine) runCompress(state *interactiveState, session *Session, sessions
 		return
 	}
 
-	e.processCompressEvents(state, session, sessions, iKey, p, replyCtx, &compressUnlocked, auto)
+	e.processForwardedCommandEvents(state, session, sessions, iKey, p, replyCtx, &unlocked, auto, emptyMsgKey)
 }
 
-// processCompressEvents drains agent events after a compress command.
-// Unlike processInteractiveEvents it does NOT record history and treats
-// an empty result as success rather than "(empty response)".
-func (e *Engine) processCompressEvents(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, p Platform, replyCtx any, unlocked *bool, auto bool) {
+// processForwardedCommandEvents drains agent events after a forwarded command.
+// Unlike processInteractiveEvents it does NOT record history and treats an
+// empty result as success rather than "(empty response)".
+func (e *Engine) processForwardedCommandEvents(state *interactiveState, session *Session, sessions *SessionManager, sessionKey string, p Platform, replyCtx any, unlocked *bool, auto bool, emptyMsgKey MsgKey) {
 
 	var textParts []string
 	events := state.agentSession.Events()
@@ -10506,7 +10566,7 @@ func (e *Engine) processCompressEvents(state *interactiveState, session *Session
 					if len(textParts) > 0 {
 						e.send(p, replyCtx, strings.Join(textParts, ""))
 					} else {
-						e.reply(p, replyCtx, e.i18n.T(MsgCompressDone))
+						e.reply(p, replyCtx, e.i18n.T(emptyMsgKey))
 					}
 				}
 				e.notifyDroppedQueuedMessages(state, fmt.Errorf("agent process exited during compress"))
@@ -10566,7 +10626,7 @@ func (e *Engine) processCompressEvents(state *interactiveState, session *Session
 				if result != "" {
 					e.send(p, replyCtx, result)
 				} else {
-					e.reply(p, replyCtx, e.i18n.T(MsgCompressDone))
+					e.reply(p, replyCtx, e.i18n.T(emptyMsgKey))
 				}
 			}
 

@@ -9832,6 +9832,109 @@ type stubCompressorAgent struct {
 
 func (a *stubCompressorAgent) CompressCommand() string { return a.cmd }
 
+type stubStatusAgent struct {
+	stubAgent
+	cmd string
+}
+
+func (a *stubStatusAgent) StatusCommand() string { return a.cmd }
+
+// status_command 配置后，IM /status 应转发到 Agent 并展示其回执，而不是渲染
+// cc-connect 自身状态。
+func TestCmdStatus_ForwardsToStatusAgent(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	sess := newQueuingSession("status-forward")
+	agent := &stubStatusAgent{cmd: "/status"}
+	e := NewEngine("test", agent, []Platform{p}, "", LangEnglish)
+
+	key := "test:user1"
+	state := &interactiveState{
+		agentSession: sess,
+		platform:     p,
+		replyCtx:     "ctx",
+	}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	msg := &Message{SessionKey: key, Content: "/status", ReplyCtx: "ctx"}
+	e.cmdStatus(p, msg)
+
+	deadline := time.After(3 * time.Second)
+	for {
+		sess.sendMu.Lock()
+		n := len(sess.sendCalls)
+		sess.sendMu.Unlock()
+		if n > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for status Send call")
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	sess.sendMu.Lock()
+	gotCmd := sess.sendCalls[0]
+	sess.sendMu.Unlock()
+	if gotCmd != "/status" {
+		t.Fatalf("forwarded command = %q, want /status", gotCmd)
+	}
+
+	sess.events <- Event{Type: EventText, Content: "Model: test-model"}
+	sess.events <- Event{Type: EventResult, Content: "Model: test-model", Done: true}
+
+	for {
+		found := false
+		for _, s := range p.getSent() {
+			if strings.Contains(s, "Model: test-model") {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for forwarded status result, sent = %v", p.getSent())
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+}
+
+// 未配置 status_command 的 Agent 仍走 cc-connect 自身状态，不受转发逻辑影响。
+func TestCmdStatus_NoStatusCommand_ShowsOwnStatus(t *testing.T) {
+	p := &stubPlatformEngine{n: "test"}
+	sess := newQueuingSession("status-own")
+	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)
+
+	key := "test:user1"
+	state := &interactiveState{agentSession: sess, platform: p, replyCtx: "ctx"}
+	e.interactiveMu.Lock()
+	e.interactiveStates[key] = state
+	e.interactiveMu.Unlock()
+
+	msg := &Message{SessionKey: key, Content: "/status", ReplyCtx: "ctx"}
+	e.cmdStatus(p, msg)
+
+	sent := p.getSent()
+	if len(sent) == 0 {
+		t.Fatal("expected a reply")
+	}
+	if !strings.Contains(sent[0], "cc-connect Status") {
+		t.Fatalf("expected cc-connect status, got %q", sent[0])
+	}
+	sess.sendMu.Lock()
+	n := len(sess.sendCalls)
+	sess.sendMu.Unlock()
+	if n != 0 {
+		t.Fatalf("no status command should be forwarded, sendCalls=%d", n)
+	}
+}
+
 func TestCmdCompress_NoCompressor_RepliesNotSupported(t *testing.T) {
 	p := &stubPlatformEngine{n: "test"}
 	e := NewEngine("test", &stubAgent{}, []Platform{p}, "", LangEnglish)

@@ -313,6 +313,9 @@ const (
 	MsgCompressNoSession    MsgKey = "compress_no_session"
 	MsgCompressDone         MsgKey = "compress_done"
 
+	MsgStatusNoSession MsgKey = "status_no_session"
+	MsgStatusEmpty     MsgKey = "status_empty"
+
 	MsgMemoryNotSupported MsgKey = "memory_not_supported"
 	MsgMemoryShowProject  MsgKey = "memory_show_project"
 	MsgMemoryShowGlobal   MsgKey = "memory_show_global"
@@ -2374,6 +2377,20 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "✅ 上下文壓縮完成。",
 		LangJapanese:           "✅ コンテキスト圧縮完了。",
 		LangSpanish:            "✅ Contexto comprimido.",
+	},
+	MsgStatusNoSession: {
+		LangEnglish:            "No active session to query. Send a message first.",
+		LangChinese:            "没有活跃的会话可查询。请先发送一条消息。",
+		LangTraditionalChinese: "沒有活躍的會話可查詢。請先發送一條訊息。",
+		LangJapanese:           "照会するアクティブなセッションがありません。まずメッセージを送信してください。",
+		LangSpanish:            "No hay sesión activa para consultar. Envíe un mensaje primero.",
+	},
+	MsgStatusEmpty: {
+		LangEnglish:            "The agent returned no status.",
+		LangChinese:            "Agent 未返回状态。",
+		LangTraditionalChinese: "Agent 未返回狀態。",
+		LangJapanese:           "エージェントは状態を返しませんでした。",
+		LangSpanish:            "El agente no devolvió ningún estado.",
 	},
 
 	// Inline strings for engine.go commands
