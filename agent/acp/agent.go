@@ -37,6 +37,12 @@ type Agent struct {
 	memoryFile       string
 	globalMemoryFile string
 
+	// compressCommand is the optional native slash command for
+	// core.ContextCompressor (e.g. "/compact" for myagent). Empty means the
+	// agent does not advertise compression support, so /compress keeps
+	// replying "not supported" exactly as before.
+	compressCommand string
+
 	// statusCommand is the optional native status slash command for
 	// core.StatusCommandProvider (e.g. "/status" for myagent). Empty means the
 	// agent does not advertise status support, so /status keeps showing
@@ -81,6 +87,9 @@ var _ sessionCallbacks = (*Agent)(nil)
 // Ensure *Agent advertises memory-file support to the engine (/memory, /cron setup).
 var _ core.MemoryFileProvider = (*Agent)(nil)
 
+// Ensure *Agent advertises context compression when compress_command is set (/compress).
+var _ core.ContextCompressor = (*Agent)(nil)
+
 // Ensure *Agent advertises native status forwarding when status_command is set (/status).
 var _ core.StatusCommandProvider = (*Agent)(nil)
 
@@ -88,7 +97,8 @@ var _ core.StatusCommandProvider = (*Agent)(nil)
 // Required: options["command"] — executable name or path for the ACP agent.
 // Optional: options["args"], options["env"], options["auth_method"],
 // options["display_name"], options["mode"], options["memory_file"],
-// options["global_memory_file"], options["status_command"].
+// options["global_memory_file"], options["compress_command"],
+// options["status_command"].
 func New(opts map[string]any) (core.Agent, error) {
 	workDir, _ := opts["work_dir"].(string)
 	if workDir == "" {
@@ -116,6 +126,7 @@ func New(opts map[string]any) (core.Agent, error) {
 	mode = strings.TrimSpace(mode)
 	memoryFile := strings.TrimSpace(stringOpt(opts, "memory_file"))
 	globalMemoryFile := strings.TrimSpace(stringOpt(opts, "global_memory_file"))
+	compressCommand := strings.TrimSpace(stringOpt(opts, "compress_command"))
 	statusCommand := strings.TrimSpace(stringOpt(opts, "status_command"))
 
 	return &Agent{
@@ -129,6 +140,7 @@ func New(opts map[string]any) (core.Agent, error) {
 		displayName:      displayName,
 		memoryFile:       memoryFile,
 		globalMemoryFile: globalMemoryFile,
+		compressCommand:  compressCommand,
 		statusCommand:    statusCommand,
 		mode:             mode,
 	}, nil
@@ -271,6 +283,22 @@ func (a *Agent) resolveMemoryPath(configured string) string {
 	return filepath.Join(dir, configured)
 }
 
+// -- ContextCompressor --
+//
+// compress_command is opt-in: when unset CompressCommand returns "", which the
+// engine treats exactly like an agent that does not implement ContextCompressor
+// ("this agent does not support context compression" for /compress, /compact).
+// The command is a native slash command owned by the downstream ACP agent
+// (e.g. "/compact" for myagent); it is forwarded verbatim as a session prompt.
+
+// CompressCommand returns the configured native slash command, or "" when the
+// agent does not support context compression.
+func (a *Agent) CompressCommand() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.compressCommand
+}
+
 // -- StatusCommandProvider --
 //
 // status_command is opt-in: when unset StatusCommand returns "", which the
@@ -315,6 +343,9 @@ func (a *Agent) WorkspaceAgentOptions() map[string]any {
 	}
 	if a.globalMemoryFile != "" {
 		opts["global_memory_file"] = a.globalMemoryFile
+	}
+	if a.compressCommand != "" {
+		opts["compress_command"] = a.compressCommand
 	}
 	if a.statusCommand != "" {
 		opts["status_command"] = a.statusCommand

@@ -1982,6 +1982,13 @@ app_secret = "your-feishu-app-secret"
 # 可选：若 Agent 会读取项目指令文件（AGENTS.md / CLAUDE.md 等），用 memory_file 指向它，
 # cc-connect 就能通过 `/cron setup`、`/bind setup` 把自己的能力说明写进去；
 # 相对路径按 work_dir 解析。
+# Optional: if the agent has a native compaction slash command, set compress_command
+# so IM `/compress` (alias `/compact`) forwards it to the agent. Unset means the
+# agent is treated as not supporting compression (the previous behavior). The value
+# is forwarded verbatim as a session prompt; e.g. myagent uses "/compact".
+# 可选：若 Agent 自带压缩命令，用 compress_command 指定，IM 里的 `/compress`
+# （别名 `/compact`）就会把它转发给 Agent；不配置则维持「不支持上下文压缩」的旧行为。
+# 命令会原样作为 session prompt 发送，例如 myagent 用 "/compact"。
 # Optional: if the agent has a native status slash command, set status_command so
 # IM `/status` forwards to the agent instead of showing cc-connect's own status.
 # Unset keeps the previous behavior (cc-connect system status). The value is
@@ -2096,6 +2103,7 @@ app_secret = "your-feishu-app-secret"
 # cmd = "myagent"                 # 或 myagent 二进制的绝对路径
 # args = ["acp"]
 # memory_file = "AGENTS.md"       # 相对 work_dir 解析；myagent 默认注入该文件
+# compress_command = "/compact"   # IM /compress 转发到 myagent 的压缩命令
 # status_command = "/status"      # IM /status 转发到 myagent 的运行状态
 # display_name = "myagent"
 
