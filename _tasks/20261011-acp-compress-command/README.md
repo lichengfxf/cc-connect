@@ -81,7 +81,7 @@ myagent 的 `/compact` 只归档**长期记忆**，不收缩当前会话上下�
 - 变更记录更新：需要且已完成 —— `CHANGELOG.md`（Unreleased/Added）、`CLAUDE.md` 变更记录。
 - 用户可感知变化：配置 `compress_command` 后，IM 的 `/compress`、`/compact` 转发到下游 ACP agent；未配置时行为不变。
 - 功能边界：默认不改变其它 ACP agent 行为；myagent 的 `/compact` 只归档长期记忆，不收缩当前会话上下文。
-- 对应提交：待提交
+- 对应提交：`49dcb2a2`（恢复 compress_command；原 `220909e` 在主线对齐时被孤立丢弃后按原 diff 还原）
 
 ## 风险与待确认项
 
