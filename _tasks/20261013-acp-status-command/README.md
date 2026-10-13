@@ -69,7 +69,7 @@
 - 变更记录更新：已完成（`CHANGELOG.md`、`CLAUDE.md`）。
 - 用户可感知变化：配置 `status_command` 后 IM `/status` 转发到 ACP Agent；未配置时行为不变。
 - 功能边界：通用 ACP 适配器，命令名由配置提供；默认不改变其它 Agent。
-- 对应提交：待提交。
+- 对应提交：`d94c97cc`（status_command 转发）
 
 ## 风险与待确认项
 
